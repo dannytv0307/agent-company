@@ -28,6 +28,8 @@ export type EdgeVariant = 'tree' | 'cross' | 'manual'
 export type EdgeData = {
   variant: EdgeVariant
   centerX?: number
+  /** Turn horizontally at this y (keeps edges to a second row of cards in the gap above it). */
+  centerY?: number
   /** Route along a vertical gutter at this x (left of the source), instead of a smooth-step. */
   gutter?: number
 }
@@ -59,6 +61,11 @@ export function buildLayout(org: OrgDef): Layout {
   // Divisions with nobody in them (e.g. Antigravity before any hire) stay off the chart.
   const side = rest.filter((d) => d.id !== REPO_DIVISION && (d.ceo || d.departments.some((dep) => dep.members.length)))
   const mainCeo = main?.ceo?.id
+
+  if (main?.ceo && !main.departments.length && !side.length) {
+    leadLayout(org, main.ceo.id, repo, place, edges)
+    return withAdjacency(nodes, edges)
+  }
 
   // ── main division: departments as columns ──────────────────
   let mainW = 0
@@ -154,6 +161,65 @@ export function buildLayout(org: OrgDef): Layout {
   place(org.owner.id, main ? mainW / 2 + 40 : totalW / 2 - 120, 0, { kind: 'owner' })
   if (mainCeo) edge(org.owner.id, mainCeo, 'bottom', 'top')
 
+  return withAdjacency(nodes, edges)
+}
+
+/**
+ * The company as it works now: the owner, the CEO under them, and the selected project's team in a
+ * frame below — a grid of at most five agents per row.
+ */
+function leadLayout(
+  org: OrgDef,
+  ceoId: string,
+  repo: OrgDef['divisions'][number] | undefined,
+  place: (id: string, x: number, y: number, data: NodeData, extra?: Partial<Node<NodeData>>) => void,
+  edges: Edge<EdgeData>[],
+) {
+  const [head, ...sections] = repo?.departments ?? []
+  const groups = sections.filter((g) => g.members.length)
+  // At most five cards per row; a section with more wraps into even rows.
+  const shape = (n: number) => {
+    const rows = Math.max(1, Math.ceil(n / 5))
+    return { rows, perRow: Math.max(1, Math.ceil(n / rows)) }
+  }
+  const cols = Math.max(1, ...groups.map((g) => shape(g.members.length).perRow))
+  const ROW_H = CARD_H + 34
+  const gridW = INDENT + cols * CARD_W + (cols - 1) * COL_GAP
+  const w = Math.max(gridW + PAD * 2, 560)
+  const link = (source: string, target: string, sourceHandle: string, targetHandle: string, centerY?: number) =>
+    edges.push({ id: `${source}->${target}`, source, target, sourceHandle, targetHandle, type: 'pulse', data: { variant: 'tree', centerY } })
+
+  place(org.owner.id, w / 2 - CEO_W / 2, 0, { kind: 'owner' })
+  place(ceoId, w / 2 - CEO_W / 2, TOP, { kind: 'agent', agentId: ceoId })
+  link(org.owner.id, ceoId, 'bottom', 'top')
+  if (!repo || !head) return
+
+  const top = TOP + CARD_H + 48
+  const headerY = top + 18
+  const headId = `dept:${repo.id}:${head.id}`
+  place(headId, PAD, headerY, { kind: 'dept', divisionId: repo.id, deptId: head.id, compact: false }, { selectable: false })
+  link(ceoId, headId, 'bottom', 'top')
+
+  // Cards start right of the gutter the edges run down, so no edge crosses a card or a label.
+  const left = (w - gridW) / 2 + INDENT
+  let y = headerY + DEPT_H + 18
+  for (const g of groups) {
+    place(`dept:${repo.id}:${g.id}`, left, y, { kind: 'dept', divisionId: repo.id, deptId: g.id, compact: true }, { selectable: false })
+    y += LABEL_H + 22
+    const { perRow, rows } = shape(g.members.length)
+    g.members.forEach((m, i) => {
+      const cy = y + Math.floor(i / perRow) * ROW_H
+      place(m.id, left + (i % perRow) * (CARD_W + COL_GAP), cy, { kind: 'agent', agentId: m.id })
+      // Down the gutter, then across the gap just above the card's row.
+      link(headId, m.id, 'bottom', 'top', cy - 17)
+    })
+    y += rows * ROW_H - 34 + 22
+  }
+  const bottom = groups.length ? y - 22 + PAD : headerY + DEPT_H + PAD
+  place(`div:${repo.id}`, 0, top, { kind: 'division', divisionId: repo.id, width: w, height: bottom - top }, { selectable: false, zIndex: -1 })
+}
+
+function withAdjacency(nodes: Node<NodeData>[], edges: Edge<EdgeData>[]): Layout {
   const adjacency: Layout['adjacency'] = new Map()
   const link = (a: string, b: string, edgeId: string, forward: boolean) => {
     if (!adjacency.has(a)) adjacency.set(a, [])

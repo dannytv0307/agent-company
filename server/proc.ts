@@ -19,6 +19,13 @@ export function spawnCli(bin: string, args: string[], opts: { cwd?: string; env?
   })
 }
 
+/** Stop a CLI and every process it started (MCP servers, shells…). On Windows that takes taskkill /T. */
+export function killTree(child: ChildProcess) {
+  if (child.exitCode !== null || !child.pid) return
+  if (isWin) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill())
+  else child.kill('SIGTERM')
+}
+
 export function capture(bin: string, args: string[], timeoutMs = 8000): Promise<{ code: number | null; out: string }> {
   return new Promise((resolve) => {
     let out = ''

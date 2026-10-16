@@ -22,15 +22,22 @@ export function projectsOf(org: OrgDef): ProjectRef[] {
   const list = org.company.projects?.length ? org.company.projects : [{ id: 'main', name: 'Main', path: org.company.workspace ?? './workspace' }]
   return list.map((p) => {
     const dir = path.resolve(ROOT, p.path)
-    const scan = scanProject(dir)
-    const mode = p.team ?? (scan?.agents.length ? 'mixed' : 'company')
-    return { ...p, dir, exists: existsSync(dir), scan, mode }
+    return {
+      id: p.id,
+      name: p.name,
+      path: p.path,
+      ...(p.allow?.length ? { allow: p.allow } : {}),
+      ...(p.codexNetwork ? { codexNetwork: true } : {}),
+      dir,
+      exists: existsSync(dir),
+      scan: scanProject(dir),
+    }
   })
 }
 
-/** The repo's own agents for a project, as read-only team members reporting to the CEO. */
+/** A project's team: the repo's own agents (.claude/agents and .codex/agents), reporting to the organizer. */
 export function projectTeam(org: OrgDef, project: ProjectRef): AgentRef[] {
-  const ceo = org.divisions.find((d) => d.runtime === 'claude' && d.ceo)?.ceo
+  const ceo = mainCeo(org)
   const taken = new Set(allAgents(org).map((a) => a.id))
   return (project.scan?.agents ?? [])
     .filter((a) => !taken.has(a.id))
@@ -43,9 +50,11 @@ export function projectTeam(org: OrgDef, project: ProjectRef): AgentRef[] {
       description: a.description,
       tools: a.tools,
       model: a.model,
+      ...(a.prompt ? { prompt: a.prompt } : {}),
+      ...(a.sandbox ? { sandbox: a.sandbox } : {}),
       divisionId: `project:${project.id}`,
-      departmentId: 'repo',
-      runtime: 'claude' as const,
+      departmentId: a.runtime === 'codex' ? 'codex' : 'claude',
+      runtime: a.runtime ?? 'claude',
       isCeo: false,
       manual: false,
       managerId: ceo?.id ?? org.owner.id,

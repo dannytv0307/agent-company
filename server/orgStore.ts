@@ -1,13 +1,13 @@
-// Mutations of org.yaml: owner profile, approved org designs, hires and dismissals.
+// Mutations of org.yaml: owner profile, the CEO, and the project list.
 import { writeFileSync } from 'node:fs'
 import YAML from 'yaml'
-import type { AgentDef, DivisionDef, HireSpec, OrgDef, OrgDesign, OwnerDef, ProjectDef, Runtime, TeamMode } from '../shared/types.ts'
-import { allAgents, loadOrg, ORG_FILE } from './org.ts'
+import type { AgentDef, OrgDef, OwnerDef, ProjectDef } from '../shared/types.ts'
+import { loadOrg, ORG_FILE } from './org.ts'
 
 const HEADER = `# ─────────────────────────────────────────────────────────────
 #  Agent Company — single source of truth.
-#  Maintained by the app (owner profile, approved org changes). Hand edits are fine too.
-#  A full example lives in templates/software-company.yaml.
+#  Maintained by the app (owner profile, organizer, projects). Hand edits are fine too.
+#  Each project's team lives in its own repo: .claude/agents/*.md
 # ─────────────────────────────────────────────────────────────
 
 `
@@ -25,49 +25,8 @@ function mutate<T>(fn: (org: OrgDef) => T): Promise<T> {
   return next
 }
 
-const PALETTE = ['#f472b6', '#a78bfa', '#34d399', '#fbbf24', '#22d3ee', '#60a5fa', '#f87171', '#2dd4bf', '#818cf8', '#fb923c']
-const colorFor = (id: string) => PALETTE[[...id].reduce((h, c) => h + c.charCodeAt(0), 0) % PALETTE.length]
-
-const slug = (s: string) =>
+export const slug = (s: string) =>
   s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').replace(/^(\d)/, 'a$1').slice(0, 24) || 'agent'
-
-function divisionFor(org: OrgDef, runtime: Runtime = 'claude'): DivisionDef {
-  return org.divisions.find((d) => d.runtime === runtime) ?? org.divisions[0]
-}
-
-function toAgent(spec: Omit<HireSpec, 'department'>): AgentDef {
-  const id = slug(spec.id)
-  return {
-    id,
-    name: spec.name,
-    role: spec.role,
-    avatar: [...(spec.name.en || id)][0].toUpperCase(),
-    color: colorFor(id),
-    description: spec.description,
-    ...(spec.model ? { model: spec.model } : {}),
-    ...(spec.prompt ? { prompt: spec.prompt } : {}),
-    ...(spec.tools?.length ? { tools: spec.tools } : {}),
-    ...(spec.sandbox ? { sandbox: spec.sandbox } : spec.runtime === 'codex' ? { sandbox: 'read-only' as const } : {}),
-  }
-}
-
-function addMember(org: OrgDef, spec: HireSpec): AgentDef {
-  const taken = new Set([org.owner.id, ...allAgents(org).map((a) => a.id)])
-  const agent = toAgent(spec)
-  let id = agent.id
-  for (let i = 2; taken.has(id); i++) id = `${agent.id}-${i}`
-  agent.id = id
-  const div = divisionFor(org, spec.runtime)
-  const depId = slug(spec.department.id)
-  let dep = div.departments.find((d) => d.id === depId)
-  if (!dep) {
-    const name = spec.department.name ?? org.divisions.flatMap((d) => d.departments).find((d) => d.id === depId)?.name ?? { en: depId, ja: depId }
-    dep = { id: depId, name, icon: '', members: [] }
-    div.departments.push(dep)
-  }
-  dep.members.push(agent)
-  return agent
-}
 
 export function updateProfile(patch: { owner?: Partial<OwnerDef>; company?: Partial<Pick<OrgDef['company'], 'name' | 'mission' | 'rules'>> }) {
   return mutate((org) => {
@@ -107,13 +66,32 @@ export function addProject(name: string, storedPath: string) {
   })
 }
 
-export function updateProject(id: string, patch: { name?: string; path?: string; team?: TeamMode }) {
+export function updateProject(id: string, patch: { name?: string; path?: string; allow?: string[]; codexNetwork?: boolean }) {
   return mutate((org) => {
     const p = ensureProjects(org).find((x) => x.id === id)
     if (!p) throw new Error(`No project "${id}"`)
     if (patch.name?.trim()) p.name = patch.name.trim()
     if (patch.path) p.path = patch.path
-    if (patch.team) p.team = patch.team
+    if (patch.allow) {
+      const rules = [...new Set(patch.allow.map((r) => r.trim()).filter(Boolean))]
+      if (rules.length) p.allow = rules
+      else delete p.allow
+    }
+    if (patch.codexNetwork !== undefined) {
+      if (patch.codexNetwork) p.codexNetwork = true
+      else delete p.codexNetwork
+    }
+    return p
+  })
+}
+
+/** Add permissions to a project (an approved request). */
+export function grantPermissions(id: string, req: { tools?: string[]; codexNetwork?: boolean }) {
+  return mutate((org) => {
+    const p = ensureProjects(org).find((x) => x.id === id)
+    if (!p) throw new Error(`No project "${id}"`)
+    if (req.tools?.length) p.allow = [...new Set([...(p.allow ?? []), ...req.tools.map((r) => r.trim()).filter(Boolean)])]
+    if (req.codexNetwork) p.codexNetwork = true
     return p
   })
 }
@@ -164,42 +142,6 @@ export function updateAgent(id: string, patch: AgentPatch) {
     if (patch.model !== undefined) {
       if (patch.model.trim()) a.model = patch.model.trim()
       else delete a.model
-    }
-    return a
-  })
-}
-
-/** Replace every non-core department with the CEO's design. Core roles (CEO, HR) stay. */
-export function applyDesign(design: OrgDesign) {
-  return mutate((org) => {
-    if (design.company?.name) org.company.name = design.company.name
-    if (design.company?.mission !== undefined) org.company.mission = design.company.mission
-    if (design.company?.rules) org.company.rules = design.company.rules
-    for (const div of org.divisions) {
-      div.departments = div.departments
-        .map((d) => ({ ...d, members: d.members.filter((m) => m.core) }))
-        .filter((d) => d.members.length)
-    }
-    const added: string[] = []
-    for (const dep of design.departments) {
-      for (const m of dep.members) added.push(addMember(org, { ...m, department: { id: dep.id, name: dep.name } }).id)
-    }
-    return added
-  })
-}
-
-export function hire(spec: HireSpec) {
-  return mutate((org) => addMember(org, spec))
-}
-
-export function dismiss(id: string) {
-  return mutate((org) => {
-    const a = allAgents(org).find((x) => x.id === id)
-    if (!a) throw new Error(`No agent "${id}"`)
-    if (a.core || a.isCeo) throw new Error(`${id} is a core role and cannot be dismissed`)
-    for (const div of org.divisions) {
-      for (const dep of div.departments) dep.members = dep.members.filter((m) => m.id !== id)
-      div.departments = div.departments.filter((d) => d.members.length)
     }
     return a
   })

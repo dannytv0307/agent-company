@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Local control plane for your AI software company (Claude Code + Codex + Antigravity)",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:start\" \"npm:dev:web\"",
+    "dev:watch": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node --watch-path=server --watch-path=shared server/index.ts",
     "dev:web": "vite",
     "build": "vite build",

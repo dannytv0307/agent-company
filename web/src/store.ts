@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentDef, AgentEvent, AgentRef, ManualTask, OrgDef, Plan, ProjectRef, Proposal, RuntimeStatus } from '../../shared/types.ts'
+import type { AgentDef, AgentEvent, AgentRef, Checkpoint, ManualTask, OrgDef, Plan, ProjectRef, Proposal, RuntimeStatus, WorkItem } from '../../shared/types.ts'
 import { get } from './api.ts'
 import { buildLayout, findPath, REPO_DIVISION, type Layout } from './layout.ts'
 
@@ -152,20 +152,37 @@ export function deriveStates(events: AgentEvent[], agents: AgentRef[], manual: M
   return st
 }
 
-/** The org as drawn: the selected project's own repo agents get a frame of their own. */
-function chartOrg(org: OrgDef, project: ProjectRef | undefined, repo: AgentRef[]): OrgDef {
-  if (!project || project.mode === 'company' || !repo.length) return org
-  const [main, ...rest] = org.divisions
-  // In "repo team" mode the company keeps only its core roles (HR) on this project.
-  const mainView = project.mode === 'project' ? { ...main, departments: main.departments.filter((d) => d.members.some((m) => m.core)) } : main
+/** The org as drawn: owner → CEO → the selected project's team (its repo agents), in a frame of its own. */
+function chartOrg(org: OrgDef, project: ProjectRef | undefined, team: AgentRef[]): OrgDef {
+  if (!project) return org
   const frame: OrgDef['divisions'][number] = {
     id: REPO_DIVISION,
     runtime: 'claude',
-    label: { en: `${project.name} · own agents`, ja: `${project.name}・専用エージェント` },
+    // The heading lives on the frame's label row (a node the organizer's edge can reach), not the frame.
+    label: { en: '', ja: '' },
     color: '#94a3b8',
-    departments: [{ id: 'team', name: { en: `From the repo · ${repo.length}`, ja: `リポジトリ由来・${repo.length}` }, icon: '', members: repo as AgentDef[] }],
+    departments: [
+      {
+        id: 'team',
+        name: team.length
+          ? { en: `${project.name} · team of ${team.length}`, ja: `${project.name}・${team.length}名のチーム` }
+          : { en: `${project.name} · no agents yet — ask the organizer to propose a team`, ja: `${project.name}・エージェントはまだいません — オーガナイザーにチームの提案を依頼してください` },
+        icon: '',
+        members: [],
+      },
+      // One section per engine, so it is clear who runs on Claude Code and who on Codex.
+      ...(['claude', 'codex'] as const)
+        .map((rt) => ({ rt, members: team.filter((a) => (a.runtime === 'codex' ? 'codex' : 'claude') === rt) }))
+        .filter((s) => s.members.length)
+        .map(({ rt, members }) => ({
+          id: rt,
+          name: rt === 'codex' ? { en: `Codex · ${members.length}`, ja: `Codex・${members.length}` } : { en: `Claude Code · ${members.length}`, ja: `Claude Code・${members.length}` },
+          icon: '',
+          members: members as AgentDef[],
+        })),
+    ],
   }
-  return { ...org, divisions: [mainView, ...rest, frame] }
+  return { ...org, divisions: [...org.divisions, frame] }
 }
 
 export function useCompany() {
@@ -180,6 +197,8 @@ export function useCompany() {
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [manual, setManual] = useState<ManualTask[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
+  const [work, setWork] = useState<WorkItem[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
   const [pulses, setPulses] = useState<Pulse[]>([])
   const [now, setNow] = useState(Date.now())
@@ -201,6 +220,8 @@ export function useCompany() {
 
   const refreshManual = useCallback(() => get<ManualTask[]>('/api/manual').then(setManual).catch(() => {}), [])
   const refreshProposals = useCallback(() => get<Proposal[]>('/api/proposals').then(setProposals).catch(() => {}), [])
+  const refreshCheckpoints = useCallback(() => get<Checkpoint[]>('/api/checkpoints').then(setCheckpoints).catch(() => {}), [])
+  const refreshWork = useCallback(() => get<WorkItem[]>('/api/work').then(setWork).catch(() => {}), [])
   const refreshState = useCallback(
     () =>
       get<{ runs: { projectId: string; runId: string }[]; demo: boolean }>('/api/state')
@@ -257,6 +278,8 @@ export function useCompany() {
     get<RuntimeStatus[]>('/api/runtimes').then(setRuntimes).catch(() => {})
     void refreshManual()
     void refreshProposals()
+    void refreshCheckpoints()
+    void refreshWork()
     void refreshState()
     let es: EventSource | null = null
     let cancelled = false
@@ -281,6 +304,8 @@ export function useCompany() {
           void refreshOrg()
           void refreshState()
           void refreshProposals()
+          void refreshCheckpoints()
+          void refreshWork()
           refreshPlan()
         }
       }
@@ -300,6 +325,8 @@ export function useCompany() {
           if (e.kind === 'manual' || e.meta?.manualId) void refreshManual()
           if (e.kind === 'task' || e.kind === 'system') void refreshState()
           if (e.meta?.proposalId) void refreshProposals()
+          if (e.meta?.checkpointId) void refreshCheckpoints()
+          if (e.meta?.work || e.meta?.end) void refreshWork()
           if (e.meta?.orgChanged) void refreshOrg()
           if (e.meta?.planChanged && e.meta.planChanged === projectIdRef.current) refreshPlan()
       })
@@ -322,15 +349,18 @@ export function useCompany() {
       es?.close()
       clearInterval(tick)
     }
-  }, [animate, refreshManual, refreshOrg, refreshPlan, refreshProposals, refreshState])
+  }, [animate, refreshCheckpoints, refreshManual, refreshOrg, refreshPlan, refreshProposals, refreshState, refreshWork])
 
   const states = useMemo(() => deriveStates(events, agents, manual, runtimes, now), [events, agents, manual, runtimes, now])
 
   const pending = useMemo(() => proposals.filter((p) => p.status === 'pending'), [proposals])
+  const openCheckIns = useMemo(() => checkpoints.filter((c) => c.status === 'open'), [checkpoints])
+  // Everything waiting on the owner: team changes and check-ins.
+  const attention = pending.length + openCheckIns.length
   // "running" means the selected project is busy; other projects may run at the same time.
   const running = demo || runs.some((r) => r.projectId === project?.id)
   const busyProjects = useMemo(() => new Set(runs.map((r) => r.projectId)), [runs])
-  // People who belong to the selected project: the CEO, plan assignees, anyone with events there, the repo team.
+  // People who belong to the selected project: the CEO, plan assignees, anyone with events there, the team.
   const involved = useMemo(() => {
     const ids = new Set<string>()
     if (!project) return ids
@@ -338,7 +368,7 @@ export function useCompany() {
     if (ceo) ids.add(ceo)
     for (const x of plan?.tasks ?? []) if (x.assignee) ids.add(x.assignee)
     for (const e of events) if (e.projectId === project.id) for (const id of [e.agent, e.from, e.to]) if (id) ids.add(id)
-    if (project.mode !== 'company') for (const a of repoTeam) ids.add(a.id)
+    for (const a of repoTeam) ids.add(a.id)
     return ids
   }, [project, org, plan, events, repoTeam])
 
@@ -354,9 +384,9 @@ export function useCompany() {
   }, [])
 
   return {
-    org, view, agents, runtimes, events, manual, proposals, pending, running, pulses, states, layout, connected, error, now,
+    org, view, agents, runtimes, events, manual, proposals, pending, checkpoints, openCheckIns, attention, work, running, pulses, states, layout, connected, error, now,
     projects, project, repoTeam, busyProjects, selectProject, plan, progress, involved,
-    refreshManual, refreshState, refreshOrg, refreshProposals, refreshPlan,
+    refreshManual, refreshState, refreshOrg, refreshProposals, refreshCheckpoints, refreshWork, refreshPlan,
   }
 }
 

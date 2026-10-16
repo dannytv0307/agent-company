@@ -6,20 +6,26 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
-import type { HireSpec, ManualTask, OrgDesign, OrgDef, ProjectSummary, ProposalKind, RuntimeStatus, TeamMode } from '../shared/types.ts'
+import type { CheckpointKind, HireSpec, ManualTask, OrgDef, PermissionRequest, ProjectRef, ProjectSummary, ProposalKind, RuntimeStatus, TeamDesign } from '../shared/types.ts'
 import { bus, projectOfRun, tagRun } from './events.ts'
 import { allAgents, DATA_DIR, findAgent, findAgentIn, loadOrg, mainCeo, projectOf, projectsOf, projectTeam, ROOT } from './org.ts'
 import { compileOrg, DEFAULT_MAX_CONCURRENT, persona, PORT, syncProjects, writeCompiled } from './compile.ts'
 import { loadPlan, planText, progress, setPlan, taskIdIn, updateTask, type PlanInput } from './plans.ts'
-import { activeAssignments, assignmentsOf } from './assignments.ts'
+import { activeAssignments, assignmentsOf, isBusy } from './assignments.ts'
 import { detectRuntimes } from './detect.ts'
 import { runClaudeTask } from './runners/claude.ts'
-import { startCeoRun, withCeoRuntime, type CeoRun } from './runners/ceo.ts'
+import { sessionOfRun, startCeoRun, withCeoRuntime, type CeoRun } from './runners/ceo.ts'
 import { codexChildren, runCodexAgent } from './runners/codex.ts'
 import { demoRunning, startDemo, stopDemo } from './demo.ts'
-import { addMessage, anyReplying, chatHistory, clearConversation, isReplying, openQuestions, readInbox, resetProjectSessions, resetSession, sendToAgent } from './chat.ts'
+import { addMessage, anyReplying, chatHistory, clearConversation, continueDirect, isReplying, openQuestions, readInbox, resetProjectSessions, resetSession, sendToAgent } from './chat.ts'
+import { answerCheckpoint, createCheckpoint, listCheckpoints, onLateAnswer, openCheckpointOf, openCheckpoints, pollCheckpoint } from './checkpoints.ts'
 import { projectChanges, fileDiff } from './changes.ts'
-import { decide, listProposals, propose } from './proposals.ts'
+import { decide, hasPermissionRequest, listProposals, propose } from './proposals.ts'
+import { removable, removeAgent } from './projectAgents.ts'
+import { pickFolder } from './folderPicker.ts'
+import { listWork, startWork, stopWork } from './work.ts'
+import { killTree } from './proc.ts'
+import type { ChildProcess } from 'node:child_process'
 import { addProject, removeProject, setActiveProject, updateAgent, updateProfile, updateProject, type AgentPatch } from './orgStore.ts'
 
 const app = new Hono()
@@ -84,6 +90,7 @@ app.get('/api/portfolio', async (c) => {
   const events = bus.history(3000)
   const working = activeAssignments()
   const pending = listProposals().filter((p) => p.status === 'pending')
+  const checkIns = openCheckpoints()
   const everyone = [...allAgents(org), ...projects.flatMap((p) => projectTeam(org, p))].map((a) => a.id)
   const questions = openQuestions([...new Set(everyone)])
   const manualOpen = bus
@@ -101,7 +108,7 @@ app.get('/api/portfolio', async (c) => {
       name: p.name,
       dir: p.dir,
       exists: p.exists,
-      mode: p.mode,
+      team: p.scan?.agents.length ?? 0,
       running: active.has(p.id),
       progress: progress(plan),
       counts,
@@ -112,6 +119,7 @@ app.get('/api/portfolio', async (c) => {
       costUsd: mine.reduce((s, e) => s + (typeof e.meta?.costUsd === 'number' ? e.meta.costUsd : 0), 0),
       needs: {
         approvals: pending.filter((x) => x.projectId === p.id).length,
+        decisions: checkIns.filter((x) => x.projectId === p.id).length,
         questions: questions.filter((q) => q.projectId === p.id).length,
         blocked: counts.blocked,
         manual: manualOpen.filter((e) => e.projectId === p.id).length,
@@ -134,12 +142,11 @@ app.get('/api/projects/:id/diff', async (c) => {
   return c.json({ diff: await fileDiff(p.dir, c.req.query('file') ?? '') })
 })
 
-// Company agents plus the repo's own agents of the project the caller's run belongs to.
+// The CEO plus the team of the project the caller's run belongs to.
 app.get('/api/colleagues', async (c) => {
   const org = await loadOrg()
   const project = projectOf(org, projectOfRun(c.req.query('runId')))
-  const repo = project.mode === 'company' ? [] : projectTeam(org, project)
-  return c.json({ project: project.name, agents: [...allAgents(org), ...repo] })
+  return c.json({ project: project.name, agents: [...allAgents(org), ...projectTeam(org, project)] })
 })
 
 // ── plans (per project) ──────────────────────────────────────
@@ -262,8 +269,7 @@ app.put('/api/projects/active', async (c) => {
 
 app.put('/api/projects/:id', async (c) => {
   const id = c.req.param('id')
-  const { name, path: folder, team } = await c.req.json<{ name?: string; path?: string; team?: TeamMode }>()
-  if (team && !['company', 'project', 'mixed'].includes(team)) return c.json({ error: 'Unknown team mode' }, 400)
+  const { name, path: folder } = await c.req.json<{ name?: string; path?: string }>()
   const org0 = await loadOrg()
   const current = projectsOf(org0).find((p) => p.id === id)
   if (!current) return c.json({ error: 'Unknown project' }, 404)
@@ -276,12 +282,27 @@ app.put('/api/projects/:id', async (c) => {
     const target = path.resolve(ROOT, stored)
     if (projectsOf(org0).some((p) => p.id !== id && p.dir === target)) return c.json({ error: 'Another project already uses that folder' }, 400)
   }
-  await updateProject(id, { name, path: stored, team })
+  await updateProject(id, { name, path: stored })
   const org1 = await loadOrg()
   if (stored) resetProjectSessions(id) // Claude sessions only resume in the folder they ran in
-  if (stored || team) ({ skipped } = await writeCompiled(projectOf(org1, id).dir, compileOrg(org1, projectOf(org1, id))))
+  if (stored) ({ skipped } = await writeCompiled(projectOf(org1, id).dir, compileOrg(org1, projectOf(org1, id))))
   bus.emit({ kind: 'system', projectId: id, text: 'Project updated', meta: { orgChanged: true } })
   return c.json({ ok: true, created, skipped })
+})
+
+app.delete('/api/projects/:id/agents/:agentId', async (c) => {
+  const org = await loadOrg()
+  const project = projectsOf(org).find((p) => p.id === c.req.param('id'))
+  const agentId = c.req.param('agentId')
+  if (!project) return c.json({ error: 'Unknown project' }, 404)
+  if (isBusy(agentId) || isReplying(agentId)) return c.json({ error: 'This agent is working right now. Try again when it has finished.' }, 409)
+  const check = removable(project, agentId)
+  if ('error' in check) return c.json({ error: check.error }, 404)
+  const movedTo = removeAgent(project, agentId)
+  resetSession(agentId)
+  await writeCompiled(project.dir, compileOrg(org, projectsOf(org).find((p) => p.id === project.id)!)) // the organizer's brief lists the team
+  bus.emit({ kind: 'system', projectId: project.id, agent: agentId, text: `Removed ${agentId} from the team (kept in ${movedTo})`, meta: { orgChanged: true } })
+  return c.json({ ok: true, movedTo })
 })
 
 app.delete('/api/projects/:id', async (c) => {
@@ -303,17 +324,77 @@ app.post('/api/run', async (c) => {
   const project = projectOf(org, projectId)
   if (active.has(project.id)) return c.json({ error: `A run is already in progress in ${project.name}` }, 409)
   if (!project.exists) return c.json({ error: `The folder of "${project.name}" no longer exists: ${project.dir}` }, 400)
+  const runId = await launchRun(org, project, task.trim())
+  return c.json({ runId, projectId: project.id })
+})
+
+/**
+ * Who is calling an agent tool. Agents pass their own id, but a model can misremember it; an id that
+ * is not on the team falls back to the session's own agent (the chat's agent, else the organizer).
+ */
+async function actor(claimed: string | undefined, runId?: string): Promise<string> {
+  const org = await loadOrg()
+  const project = projectOf(org, projectOfRun(runId))
+  if (claimed && findAgentIn(org, claimed, project)) return claimed
+  const chat = runId?.match(/^chat-(.+)-\d+$/)?.[1]
+  return chat ?? mainCeo(org)?.id ?? claimed ?? 'organizer'
+}
+
+/** Start the organizer on a project (or resume one of its earlier sessions). */
+async function launchRun(org: OrgDef, project: ProjectRef, task: string, opts: { resume?: string } = {}): Promise<string> {
   await writeCompiled(project.dir, compileOrg(org, project)) // always run with configs that match org.yaml
   const runId = `run-${Date.now()}`
   tagRun(runId, project.id)
-  const run = startCeoRun(org, runId, task.trim(), project)
+  const run = startCeoRun(org, runId, task, project, opts)
   active.set(project.id, { runId, ceoId: mainCeo(org)?.id ?? '', run })
+  const ceo = mainCeo(org)
+  const job = startWork({ id: runId, kind: 'run', projectId: project.id, agentId: ceo?.id ?? 'organizer', engine: ceo?.runtime === 'codex' ? 'codex' : 'claude', title: task.split('\n')[0].slice(0, 120), runId, aid: runId })
+  job.attach(() => run.child)
   void run.done
     .catch(() => {})
     .finally(() => {
+      job.end()
       if (active.get(project.id)?.runId === runId) active.delete(project.id)
     })
-  return c.json({ runId, projectId: project.id })
+  return runId
+}
+
+// ── check-ins: the organizer stops for the owner at specs, plans, milestones, decisions ──
+app.get('/api/checkpoints', (c) => c.json(listCheckpoints()))
+
+app.post('/api/checkpoints', async (c) => {
+  const b = await c.req.json<{ agentId: string; kind: CheckpointKind; title: string; body: string; file?: string; options?: string[]; runId?: string }>()
+  if (!b.title?.trim() || !b.body?.trim()) return c.json({ error: 'A check-in needs a title and a body' }, 400)
+  try {
+    return c.json({ id: createCheckpoint({ ...b, agentId: await actor(b.agentId, b.runId) }, b.runId).id })
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400)
+  }
+})
+
+app.post('/api/checkpoints/:id/poll', (c) => c.json(pollCheckpoint(c.req.param('id'))))
+
+app.post('/api/checkpoints/:id/answer', async (c) => {
+  const { decision, comment } = await c.req.json<{ decision: string; comment?: string }>()
+  if (!decision) return c.json({ error: 'decision is required' }, 400)
+  if (decision === 'changes' && !comment?.trim()) return c.json({ error: 'Say what should change' }, 400)
+  return c.json(await answerCheckpoint(c.req.param('id'), { decision, comment }))
+})
+
+// The organizer stopped waiting: hand the answer to its live session, its chat, or resume its run.
+onLateAnswer(async (cp, text) => {
+  const msg = `[The owner's answer to your check-in "${cp.title}"]\n${text}`
+  const org = await loadOrg()
+  const project = projectsOf(org).find((p) => p.id === cp.projectId)
+  if (!project) throw new Error('The project no longer exists')
+  const live = active.get(project.id)
+  if (live && live.ceoId === cp.agentId && live.run.send(msg)) return
+  if (cp.runId?.startsWith('chat-') || cp.agentId !== mainCeo(org)?.id) return continueDirect(cp.agentId, msg, project)
+  if (live) await live.run.done.catch(() => {}) // finishing its last turn: resume once it has ended
+  const session = sessionOfRun(cp.runId)
+  const engine = mainCeo(org)?.runtime === 'codex' ? 'codex' : 'claude'
+  const resume = session?.engine === engine ? session.id : undefined
+  await launchRun(org, project, resume ? msg : `${msg}\n\n(Context: this answers your check-in "${cp.title}":\n${cp.body})`, { resume })
 })
 
 app.post('/api/demo', async (c) => {
@@ -327,10 +408,10 @@ app.post('/api/stop', async (c) => {
   if (stopDemo()) stopped.push('demo')
   for (const [pid, a] of active) {
     if (projectId && pid !== projectId) continue
-    a.run.child?.kill()
+    if (a.run.child) killTree(a.run.child)
     stopped.push(a.runId)
   }
-  if (!projectId || active.size <= 1) for (const ch of codexChildren) ch.kill()
+  if (!projectId || active.size <= 1) for (const ch of codexChildren) killTree(ch)
   if (stopped.length) bus.emit({ kind: 'system', projectId, text: 'Stopped by owner', meta: { end: true, runIds: stopped } })
   return c.json({ stopped })
 })
@@ -357,11 +438,15 @@ app.post('/api/delegate', async (c) => {
 
   jobs.set(jobId, { to, status: 'running' })
   const meta = { aid: jobId, taskId }
+  const work = startWork({ id: jobId, kind: 'task', projectId: project.id, agentId: to, from, engine: target.runtime === 'codex' ? 'codex' : 'claude', title: task.split('\n')[0].slice(0, 120), runId: rid, aid: jobId, status: 'queued' })
+  let child: ChildProcess | undefined
   bus.emit({ runId: rid, kind: 'dispatch', from, to, text: task.slice(0, 120), meta: { ...meta, full: task, crossDivision: target.runtime !== 'claude' } })
   void (async () => {
     await acquireAgent(to, target.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)
     await acquire()
     try {
+      if (work.stopped) throw new Error('Stopped by owner before it started')
+      work.attach(() => child)
       const notes = readInbox(to)
       const full = notes.length ? `${task}\n\nNotes from the owner for you:\n${notes.map((n) => `- ${n}`).join('\n')}` : task
       // Claude agents (company members or the repo's own agents) run as their own session in the
@@ -372,15 +457,17 @@ app.post('/api/delegate', async (c) => {
               runId: rid ?? jobId,
               project,
               ...meta,
+              onChild: (c) => (child = c),
             })
-          : await runCodexAgent(org, target, from, full, rid, { dir: project.dir, ...meta })
+          : await runCodexAgent(org, target, from, full, rid, { dir: project.dir, ...meta, onChild: (c) => (child = c) })
       bus.emit({ runId: rid, kind: 'report', from: to, to: from, text: result.replace(/\s+/g, ' ').slice(0, 140), meta: { ...meta, full: result } })
       jobs.set(jobId, { to, status: 'done', result })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = work.stopped ? 'Stopped by the owner before it finished. Do not retry it unless the owner asks.' : e instanceof Error ? e.message : String(e)
       bus.emit({ runId: rid, kind: 'error', agent: to, text: msg.slice(0, 200), meta })
       jobs.set(jobId, { to, status: 'error', error: msg })
     } finally {
+      work.end()
       release()
       releaseAgent(to)
     }
@@ -441,19 +528,29 @@ app.put('/api/agents/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-// ── org proposals (CEO designs, HR hires) ────────────────────
+// ── team proposals (the CEO builds each project's team) ─────
 app.get('/api/proposals', (c) => c.json(listProposals()))
 
 app.post('/api/proposals', async (c) => {
-  const body = await c.req.json<{ kind: ProposalKind; from: string; reason?: string; design?: OrgDesign; hire?: HireSpec; dismiss?: { id: string }; runId?: string }>()
-  if (body.kind === 'design' && !body.design?.departments?.length) return c.json({ error: 'design.departments is empty' }, 400)
+  const body = await c.req.json<{ kind: ProposalKind; from: string; reason?: string; design?: TeamDesign; hire?: HireSpec; dismiss?: { id: string }; permission?: PermissionRequest; runId?: string }>()
+  if (body.kind === 'design' && !body.design?.agents?.length) return c.json({ error: 'The team has no agents' }, 400)
   if (body.kind === 'hire' && !body.hire?.id) return c.json({ error: 'hire spec is missing' }, 400)
   if (body.kind === 'dismiss' && !body.dismiss?.id) return c.json({ error: 'dismiss.id is missing' }, 400)
-  const message = await propose(
-    { kind: body.kind, from: body.from, reason: body.reason ?? '', design: body.design, hire: body.hire, dismiss: body.dismiss },
-    body.runId,
-  )
-  return c.json({ message })
+  if (body.kind === 'permission' && !body.permission?.tools?.length && !body.permission?.codexNetwork) return c.json({ error: 'Say which tools (or codex_network) you need' }, 400)
+  if (body.kind === 'permission') {
+    const pid = projectOfRun(body.runId)
+    if (pid && (await hasPermissionRequest(pid, body.permission?.tools ?? [], !!body.permission?.codexNetwork)))
+      return c.json({ message: 'Already allowed in this project, or already waiting for the owner. Do not ask again; continue with other work.' })
+  }
+  try {
+    const message = await propose(
+      { kind: body.kind, from: await actor(body.from, body.runId), reason: body.reason ?? '', design: body.design, hire: body.hire, dismiss: body.dismiss, permission: body.permission },
+      body.runId,
+    )
+    return c.json({ message })
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400)
+  }
 })
 
 app.post('/api/proposals/:id/decide', async (c) => {
@@ -470,10 +567,82 @@ app.post('/api/chat/:id', async (c) => {
   const { text, projectId } = await c.req.json<{ text: string; projectId?: string }>()
   if (!text?.trim()) return c.json({ error: 'Message is empty' }, 400)
   const project = projectOf(await loadOrg(), projectId)
+  // While the agent waits on a check-in here, the owner's message is the answer — unless the check-in
+  // appeared only a moment ago, when the owner was most likely typing something else.
+  const open = openCheckpointOf(c.req.param('id'), project.id)
+  if (open && Date.now() - open.ts > 5000) {
+    addMessage(open.agentId, 'owner', text.trim(), project.id)
+    await answerCheckpoint(open.id, { decision: 'reply', comment: text.trim() }, { fromChat: true })
+    return c.json({ ok: true, answered: open.id })
+  }
   const run = active.get(project.id)
   const live = run ? { ceoId: run.ceoId, send: (t: string) => run.run.send(t) } : null
   await sendToAgent(c.req.param('id'), text.trim(), project, live)
   return c.json({ ok: true })
+})
+
+// The agent's reply to the owner's last message never came (e.g. the server restarted mid-reply): ask again.
+app.post('/api/chat/:id/retry', async (c) => {
+  const agentId = c.req.param('id')
+  const { projectId } = await c.req.json<{ projectId?: string }>().catch(() => ({ projectId: undefined }))
+  const project = projectOf(await loadOrg(), projectId)
+  if (isReplying(agentId)) return c.json({ error: 'The agent is replying right now.' }, 409)
+  const thread = chatHistory(agentId).filter((m) => m.projectId === project.id)
+  const last = thread.at(-1)
+  if (!last || last.role !== 'owner') return c.json({ error: 'Nothing is waiting for a reply.' }, 400)
+  // The session resumes with everything said so far, so ask it to pick up where it was cut off.
+  await continueDirect(agentId, `[Your previous reply was interrupted before you finished (the app restarted). Continue where you left off. The owner's last message was: "${last.text}"]`, project)
+  return c.json({ ok: true })
+})
+
+// A tool a session was refused becomes one permission request for the owner (unless already asked/allowed).
+const ruleFor = (tool?: string, input?: Record<string, unknown>) => {
+  if (!tool) return undefined
+  if (tool === 'Bash' && typeof input?.command === 'string') {
+    const word = input.command.trim().split(/\s+/)[0]
+    return word ? `Bash(${word} *)` : 'Bash'
+  }
+  return tool
+}
+bus.subscribe((e) => {
+  const denied = e.meta?.permissionDenied as { tool?: string; input?: Record<string, unknown> }[] | undefined
+  if (!denied?.length || !e.runId) return
+  const tools = [...new Set(denied.map((d) => ruleFor(d.tool, d.input)).filter((t): t is string => !!t))]
+  const pid = projectOfRun(e.runId)
+  if (!tools.length || !pid) return
+  void (async () => {
+    if (await hasPermissionRequest(pid, tools, false)) return
+    // Asked in the organizer's name, so the card shows up in the chat the owner follows.
+    const lead = mainCeo(await loadOrg())?.id ?? 'organizer'
+    const who = e.agent && e.agent !== lead ? `${e.agent} was` : 'The team was'
+    await propose({ kind: 'permission', from: lead, reason: `${who} refused these tools during the last session (headless runs cannot ask you).`, permission: { tools } }, e.runId)
+  })().catch(() => {})
+})
+
+// The owner edits a project's extra permissions directly (e.g. to revoke one).
+app.put('/api/projects/:id/permissions', async (c) => {
+  const { allow, codexNetwork } = await c.req.json<{ allow?: string[]; codexNetwork?: boolean }>()
+  await updateProject(c.req.param('id'), { allow: allow ?? [], codexNetwork: !!codexNetwork })
+  const org = await loadOrg()
+  const project = projectsOf(org).find((p) => p.id === c.req.param('id'))
+  if (project?.exists) await writeCompiled(project.dir, compileOrg(org, project))
+  bus.emit({ kind: 'system', projectId: c.req.param('id'), text: 'Project permissions updated', meta: { orgChanged: true } })
+  return c.json({ ok: true })
+})
+
+// ── running work: list it, stop any piece of it ──────────────
+app.get('/api/work', (c) => c.json(listWork()))
+app.post('/api/work/:id/stop', (c) => (stopWork(c.req.param('id')) ? c.json({ ok: true }) : c.json({ error: 'It is not running any more.' }, 404)))
+
+// Opens the OS folder dialog on this machine (the browser cannot reveal real paths).
+app.post('/api/pick-folder', async (c) => {
+  const { start, title } = await c.req.json<{ start?: string; title?: string }>().catch(() => ({ start: undefined, title: undefined }))
+  try {
+    const picked = await pickFolder(title?.trim() || 'Choose the project folder', start && existsSync(start) ? start : undefined)
+    return c.json(picked ? { path: picked } : { cancelled: true })
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 409)
+  }
 })
 
 app.delete('/api/chat/:id', async (c) => {
@@ -490,7 +659,7 @@ app.post('/api/inbox/:id/read', (c) => c.json({ notes: readInbox(c.req.param('id
 
 app.post('/api/chat/:id/from-agent', async (c) => {
   const { text, runId } = await c.req.json<{ text: string; runId?: string }>()
-  addMessage(c.req.param('id'), 'agent', text, projectOfRun(runId), true)
+  addMessage(await actor(c.req.param('id'), runId), 'agent', text, projectOfRun(runId), { ask: true })
   return c.json({ ok: true })
 })
 
@@ -498,6 +667,20 @@ app.post('/api/chat/:id/from-agent', async (c) => {
 const dist = path.join(ROOT, 'dist')
 if (existsSync(dist)) {
   app.use('/*', serveStatic({ root: path.relative(process.cwd(), dist) || '.' }))
+}
+
+// Work that was still going when the server last stopped can never report back. Close it, so no
+// agent keeps looking busy (with nothing left to stop) and plans do not wait on it.
+{
+  const open = new Map<string, string | undefined>()
+  for (const e of bus.history(3000)) {
+    const id = e.meta?.work
+    if (typeof id !== 'string') continue
+    if (e.text === 'Work started') open.set(id, e.runId)
+    else if (e.text === 'Work ended') open.delete(id)
+  }
+  const runIds = [...new Set([...open.values()].filter((r): r is string => !!r))]
+  if (runIds.length) bus.emit({ kind: 'system', text: 'Interrupted: the app restarted while this was running', meta: { end: true, runIds } })
 }
 
 serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, () => {

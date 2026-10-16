@@ -4,6 +4,7 @@ import { useT } from '../i18n.ts'
 import { useCompanyCtx } from '../context.ts'
 import { REPO_DIVISION, type EdgeData, type NodeData } from '../layout.ts'
 import type { Pulse } from '../store.ts'
+import type { AgentRef, L10n } from '../../../shared/types.ts'
 
 type FlowNode = Node<NodeData>
 type FlowEdge = Edge<EdgeData & { pulses?: Pulse[] }>
@@ -11,6 +12,15 @@ type FlowEdge = Edge<EdgeData & { pulses?: Pulse[] }>
 const hidden: CSSProperties = { opacity: 0, pointerEvents: 'none' }
 
 export const monogram = (name: string) => [...name.trim()][0]?.toUpperCase() ?? '·'
+
+/** The line under an agent's name: their role — or, when the role just repeats the name, what they do. */
+export function subtitle(a: AgentRef, l: (v?: L10n) => string, t: (k: 'leadsAll') => string): string {
+  if (l(a.role) !== l(a.name)) return l(a.role)
+  if (a.isCeo) return t('leadsAll')
+  // "Art Director — defines the visual style…" → "defines the visual style…"
+  const rest = a.description.replace(/^[^—–:.]*[—–:.]\s*/, '').trim()
+  return rest ? rest[0].toUpperCase() + rest.slice(1) : l(a.role)
+}
 
 function AgentNode({ id }: NodeProps<FlowNode>) {
   const { company, selected, focus } = useCompanyCtx()
@@ -40,11 +50,13 @@ function AgentNode({ id }: NodeProps<FlowNode>) {
       <div className="who">
         <div className="name">
           {l(a.name)}
-          {a.isCeo && a.runtime === 'codex' && company.view?.divisions.find((d) => d.id === a.divisionId)?.runtime !== 'codex' && (
+          {a.runtime === 'codex' && (a.external || company.view?.divisions.find((d) => d.id === a.divisionId)?.runtime !== 'codex') && (
             <span className="engine-tag">Codex</span>
           )}
         </div>
-        <div className={`sub${live ? ' live' : ''}`}>{live ? s.bubble!.replace(/^[^\p{L}\p{N}$]+/u, '') : l(a.role)}</div>
+        <div className={`sub${live ? ' live' : ''}`}>
+          {live ? s.bubble!.replace(/^[^\p{L}\p{N}$]+/u, '') : subtitle(a, l, t)}
+        </div>
       </div>
       {many ? <span className="count-badge">×{s.active.length}</span> : <span className="dot" title={t(s.status)} />}
     </div>
@@ -76,7 +88,7 @@ function DeptNode({ data }: NodeProps<FlowNode>) {
   if (!dep) return null
   const busy = dep.members.some((m) => company.states[m.id]?.status === 'working')
   return (
-    <div className={`dept${data.compact ? ' compact' : ''}${busy ? ' busy' : ''}${data.divisionId === REPO_DIVISION ? ' repo' : ''}`}>
+    <div className={`dept${data.compact ? ' compact' : ''}${busy ? ' busy' : ''}${data.divisionId === REPO_DIVISION ? ` repo eng-${data.deptId}` : ''}`}>
       <Handle type="target" position={Position.Top} id="top" style={hidden} />
       <Handle type="target" position={Position.Left} id="left" style={hidden} />
       <Handle type="source" position={Position.Bottom} id="bottom" style={{ ...hidden, left: 11 }} />
@@ -146,7 +158,10 @@ function gutterPath({ sourceX: sx, sourceY: sy, targetX: tx, targetY: ty }: Edge
 function PulseEdge(props: EdgeProps<FlowEdge>) {
   const ref = useRef<SVGPathElement>(null)
   const g = props.data?.gutter
-  const [d] = g === undefined ? getSmoothStepPath({ ...props, borderRadius: 14, offset: 16, centerX: props.data?.centerX }) : [gutterPath(props, g)]
+  const [d] =
+    g === undefined
+      ? getSmoothStepPath({ ...props, borderRadius: 14, offset: 16, centerX: props.data?.centerX, centerY: props.data?.centerY })
+      : [gutterPath(props, g)]
   const pulses = props.data?.pulses ?? []
   const active = pulses.length > 0
   return (
@@ -211,7 +226,6 @@ export function OrgChart() {
 
   return (
     <div className="chart" ref={box}>
-    <FocusToggle />
     <ReactFlow<FlowNode, FlowEdge>
       nodes={layout.nodes}
       edges={edges}
@@ -228,23 +242,6 @@ export function OrgChart() {
       onNodeClick={(_, n) => (n.data.kind === 'agent' || n.data.kind === 'owner' ? select(n.id) : undefined)}
       onPaneClick={() => select(null)}
     />
-    </div>
-  )
-}
-
-/** "Everyone / Only <project>" — fade people who are not part of the selected project. */
-function FocusToggle() {
-  const { company, focus, setFocus } = useCompanyCtx()
-  const { t } = useT()
-  if (!company.project || company.projects.length < 2) return null
-  return (
-    <div className="focus-toggle seg2" role="group">
-      <button className={!focus ? 'on' : ''} onClick={() => setFocus(false)}>
-        {t('everyone')}
-      </button>
-      <button className={focus ? 'on' : ''} onClick={() => setFocus(true)}>
-        {company.project.name}
-      </button>
     </div>
   )
 }

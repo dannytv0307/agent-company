@@ -103,10 +103,7 @@ function App() {
                 {view === 'project' && (
                   <ProjectPage
                     onBack={() => setView('portfolio')}
-                    onOrg={() => {
-                      setFocus(true)
-                      setView('org')
-                    }}
+                    onOrg={() => setView('org')}
                   />
                 )}
               </main>

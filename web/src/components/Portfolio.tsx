@@ -26,7 +26,7 @@ export function usePortfolio() {
   return { items, reload: load }
 }
 
-const needsTotal = (p: ProjectSummary) => p.needs.approvals + p.needs.questions + p.needs.blocked + p.needs.manual
+const needsTotal = (p: ProjectSummary) => p.needs.approvals + p.needs.decisions + p.needs.questions + p.needs.blocked + p.needs.manual
 
 /** Projects that need the owner first, then running ones, then by latest activity. */
 const order = (a: ProjectSummary, b: ProjectSummary) =>
@@ -138,6 +138,7 @@ export function Portfolio({ onOpen }: { onOpen: (id: string) => void }) {
               </div>
               {needs > 0 && (
                 <div className="pcard-needs">
+                  {p.needs.decisions > 0 && <span>{p.needs.decisions} {t('nCheckIns')}</span>}
                   {p.needs.approvals > 0 && <span>{p.needs.approvals} {t('nApprovals')}</span>}
                   {p.needs.questions > 0 && <span>{p.needs.questions} {t('nQuestions')}</span>}
                   {p.needs.blocked > 0 && <span>{p.needs.blocked} {t('nBlocked')}</span>}

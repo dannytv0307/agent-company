@@ -215,7 +215,7 @@ export function ProjectPage({ onBack, onOrg }: { onBack: () => void; onOrg: () =
   const [tab, setTab] = useState<'plan' | 'activity' | 'changes'>('plan')
   const p = company.project
   if (!p) return null
-  const modeLabel = { company: t('modeCompany'), project: t('modeProject'), mixed: t('modeMixed') }[p.mode]
+  const team = p.scan?.agents.length ?? 0
 
   return (
     <div className="project-page">
@@ -228,7 +228,7 @@ export function ProjectPage({ onBack, onOrg }: { onBack: () => void; onOrg: () =
           <span className={`pstate ${company.running ? 'run' : 'idle'}`}>{company.running ? t('running') : t('idle')}</span>
         </div>
         <div className="pp-meta muted">
-          <code>{p.dir}</code> · {modeLabel}
+          <code>{p.dir}</code> · {team ? `${team} ${team === 1 ? t('agentOne') : t('agentsCount')}` : t('noTeam')}
           {' · '}
           <button className="link small" onClick={onOrg}>
             {t('viewOnChart')}

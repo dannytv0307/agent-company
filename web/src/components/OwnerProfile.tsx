@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { OrgDef } from '../../../shared/types.ts'
+import type { CheckIns, OrgDef } from '../../../shared/types.ts'
 import { api } from '../api.ts'
 import { useT } from '../i18n.ts'
 import { useCompanyCtx } from '../context.ts'
@@ -12,6 +12,8 @@ type Form = {
   bio: string
   reportLanguage: string
   approval: 'manual' | 'auto'
+  checkIns: CheckIns
+  autoStop: number
   companyEn: string
   companyJa: string
   mission: string
@@ -25,6 +27,8 @@ const fromOrg = (org: OrgDef): Form => ({
   bio: org.owner.bio ?? '',
   reportLanguage: org.owner.preferences?.reportLanguage ?? 'English',
   approval: org.owner.preferences?.approval ?? 'manual',
+  checkIns: org.owner.preferences?.checkIns ?? 'key',
+  autoStop: org.owner.preferences?.autoStopMinutes ?? 0,
   companyEn: org.company.name.en,
   companyJa: org.company.name.ja,
   mission: org.company.mission ?? '',
@@ -54,7 +58,7 @@ export function OwnerProfile() {
           name: { en: form.nameEn.trim() || 'Owner', ja: form.nameJa.trim() || form.nameEn.trim() },
           title: { en: form.titleEn.trim(), ja: form.titleJa.trim() },
           bio: form.bio.trim(),
-          preferences: { approval: form.approval, reportLanguage: form.reportLanguage.trim() || 'English' },
+          preferences: { approval: form.approval, checkIns: form.checkIns, autoStopMinutes: form.autoStop, reportLanguage: form.reportLanguage.trim() || 'English' },
         },
         company: { name: { en: form.companyEn.trim() || 'My Company', ja: form.companyJa.trim() || form.companyEn.trim() }, mission: form.mission.trim() },
       })
@@ -96,6 +100,35 @@ export function OwnerProfile() {
             {t('autoApprove')}
           </button>
         </div>
+      </div>
+
+      <div className="field">
+        <span>{t('checkIns')}</span>
+        <div className="seg2" role="group">
+          {(
+            [
+              ['key', 'ciKey'],
+              ['plan', 'ciPlan'],
+              ['blocked', 'ciBlocked'],
+            ] as const
+          ).map(([v, k]) => (
+            <button key={v} className={form.checkIns === v ? 'on' : ''} onClick={() => set('checkIns', v)}>
+              {t(k)}
+            </button>
+          ))}
+        </div>
+        <p className="hint">{t('ciHint')}</p>
+      </div>
+      <div className="field">
+        <span>{t('autoStop')}</span>
+        <div className="seg2" role="group">
+          {[0, 30, 60, 120].map((m) => (
+            <button key={m} className={form.autoStop === m ? 'on' : ''} onClick={() => set('autoStop', m)}>
+              {m === 0 ? t('autoStopOff') : m < 60 ? `${m} min` : `${m / 60} h`}
+            </button>
+          ))}
+        </div>
+        <p className="hint">{t('autoStopHint')}</p>
       </div>
 
       <h3>{t('company')}</h3>

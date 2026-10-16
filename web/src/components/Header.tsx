@@ -44,10 +44,10 @@ export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals
             t('noPlanShort')
           )}
         </button>
-        <span className={`pulse${company.connected ? (working ? ' busy' : '') : ' off'}`}>
+        <button className={`pulse${company.connected ? (working || company.work.length ? ' busy' : '') : ' off'}`} onClick={onActivity} title={t('wkTitle')}>
           <i />
-          {status}
-        </span>
+          {company.work.length ? `${company.work.length} ${t('wkRunningShort')}` : status}
+        </button>
       </div>
       <nav className="actions">
         <div className="views" role="tablist">
@@ -59,10 +59,10 @@ export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals
           </button>
         </div>
         <span className="sep" />
-        {company.pending.length > 0 && (
+        {company.attention > 0 && (
           <button className="link attention" onClick={onApprovals}>
             {t('approvals')}
-            <span className="badge">{company.pending.length}</span>
+            <span className="badge">{company.attention}</span>
           </button>
         )}
         <button className="link" onClick={onActivity}>

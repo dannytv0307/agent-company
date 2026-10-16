@@ -1,16 +1,51 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentEvent, CompiledFile } from '../../../shared/types.ts'
-import { get, post } from '../api.ts'
+import { api, get, post } from '../api.ts'
 import { useT, type StringKey } from '../i18n.ts'
 import { hhmm, useCompanyCtx } from '../context.ts'
-import { monogram } from './OrgChart.tsx'
+import { monogram, subtitle } from './OrgChart.tsx'
 import { Chat } from './Chat.tsx'
 import { Approvals } from './Approvals.tsx'
 import { OwnerProfile } from './OwnerProfile.tsx'
 import { AgentEditor } from './AgentEditor.tsx'
 import { PlanView } from './PlanView.tsx'
+import { RunningWork } from './RunningWork.tsx'
 
 export const ACTIVITY = '__activity__'
+
+// Per-browser "cleared at" marks for activity views: everything up to then is hidden, nothing is deleted.
+function loadCleared(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem('activityCleared') ?? '{}')
+  } catch {
+    return {}
+  }
+}
+function useCleared() {
+  const [cleared, setCleared] = useState<Record<string, number>>(loadCleared)
+  const clear = (scope: string) => {
+    const next = { ...cleared, [scope]: Date.now() }
+    setCleared(next)
+    try {
+      localStorage.setItem('activityCleared', JSON.stringify(next))
+    } catch {
+      // storage unavailable — cleared for this visit only
+    }
+  }
+  return { since: (scope: string) => cleared[scope] ?? 0, clear }
+}
+
+function ClearBar({ onClear, count }: { onClear: () => void; count: number }) {
+  const { t } = useT()
+  if (!count) return null
+  return (
+    <div className="chat-tools activity-tools">
+      <button className="link small danger" onClick={() => confirm(t('clearActivityConfirm')) && onClear()}>
+        {t('clearActivity')}
+      </button>
+    </div>
+  )
+}
 export const APPROVALS = '__approvals__'
 export const PLAN = '__plan__'
 
@@ -94,6 +129,9 @@ export function AgentPanel() {
   const [copied, setCopied] = useState<string | null>(null)
   const [tab, setTab] = useState<'chat' | 'activity' | 'profile'>('chat')
   const [ownerTab, setOwnerTab] = useState<'profile' | 'approvals' | 'activity'>('profile')
+  const [removing, setRemoving] = useState(false)
+  const cleared = useCleared()
+  const [removeErr, setRemoveErr] = useState<string | null>(null)
 
   useEffect(() => {
     setTab('chat')
@@ -101,7 +139,7 @@ export function AgentPanel() {
   }, [selected])
   useEffect(() => {
     // Open the owner panel on approvals when something is waiting, otherwise on the profile.
-    if (selected === company.org?.owner.id) setOwnerTab(company.pending.length ? 'approvals' : 'profile')
+    if (selected === company.org?.owner.id) setOwnerTab(company.attention ? 'approvals' : 'profile')
   }, [selected])
   useEffect(() => {
     if (!selected) return
@@ -113,7 +151,8 @@ export function AgentPanel() {
   if (!selected || !company.org) return null
   const owner = company.org.owner
   const name = (id?: string) => (id === owner.id ? l(owner.name) : l(company.agents.find((x) => x.id === id)?.name) || id || '')
-  const meaningful = company.events.filter((e) => e.kind !== 'system' && e.kind !== 'chat')
+  const projectIds = new Set(company.projects.map((p) => p.id))
+  const meaningful = company.events.filter((e) => e.kind !== 'system' && e.kind !== 'chat' && (!e.projectId || projectIds.has(e.projectId)))
   const close = (
     <>
       <DockHandle />
@@ -143,7 +182,23 @@ export function AgentPanel() {
         {close}
         <h2 className="panel-title">{selected === ACTIVITY ? t('activity') : t('approvals')}</h2>
         <div className="tab-body">
-          {selected === ACTIVITY ? <Timeline events={meaningful.filter((e) => e.kind !== 'activity').slice(-80).reverse()} name={name} /> : <Approvals />}
+          {selected === ACTIVITY ? (
+            <>
+              <RunningWork />
+              <h3>{t('wkHistory')}</h3>
+              {(() => {
+                const history = meaningful.filter((e) => e.kind !== 'activity' && e.ts > cleared.since('*')).slice(-80).reverse()
+                return (
+                  <>
+                    <ClearBar count={history.length} onClear={() => cleared.clear('*')} />
+                    <Timeline events={history} name={name} />
+                  </>
+                )
+              })()}
+            </>
+          ) : (
+            <Approvals />
+          )}
         </div>
       </aside>
     )
@@ -151,7 +206,7 @@ export function AgentPanel() {
 
   // ── owner ──────────────────────────────────────────────────
   if (selected === owner.id) {
-    const reports = meaningful.filter((e) => e.to === owner.id && e.kind === 'report').slice(-30).reverse()
+    const reports = meaningful.filter((e) => e.to === owner.id && e.kind === 'report' && e.ts > cleared.since(`agent:${owner.id}`)).slice(-30).reverse()
     return (
       <aside className="panel">
         {close}
@@ -165,7 +220,7 @@ export function AgentPanel() {
         <Tabs
           tabs={[
             ['profile', 'profile'],
-            ['approvals', 'approvals', company.pending.length],
+            ['approvals', 'approvals', company.attention],
             ['activity', 'activity'],
           ]}
           value={ownerTab}
@@ -174,7 +229,12 @@ export function AgentPanel() {
         <div className="tab-body">
           {ownerTab === 'profile' && <OwnerProfile />}
           {ownerTab === 'approvals' && <Approvals />}
-          {ownerTab === 'activity' && <Timeline events={reports} name={name} full />}
+          {ownerTab === 'activity' && (
+            <>
+              <ClearBar count={reports.length} onClear={() => cleared.clear(`agent:${owner.id}`)} />
+              <Timeline events={reports} name={name} full />
+            </>
+          )}
         </div>
       </aside>
     )
@@ -184,13 +244,19 @@ export function AgentPanel() {
   const a = company.agents.find((x) => x.id === selected)
   if (!a) return null
   const st = company.states[a.id]
-  const related = meaningful.filter((e) => e.agent === a.id || e.from === a.id || e.to === a.id).slice(-40).reverse()
+  const related = meaningful
+    .filter((e) => (e.agent === a.id || e.from === a.id || e.to === a.id) && e.ts > cleared.since(`agent:${a.id}`))
+    .slice(-40)
+    .reverse()
+  const myWork = company.work.filter((w) => w.agentId === a.id)
   const file = files.find((f) => f.agentId === a.id)
   const inbox = a.manual ? company.manual.filter((m) => m.to === a.id && !m.done) : []
   // Repo agents are not in a company division; label them by their project.
   const projectOfAgent = a.external ? company.projects.find((p) => p.id === a.external) : undefined
   const runtimeLabel = projectOfAgent
-    ? { en: `${projectOfAgent.name} · repo agent`, ja: `${projectOfAgent.name}・リポジトリ` }
+    ? a.runtime === 'codex'
+      ? { en: `Codex · ${projectOfAgent.name}`, ja: `Codex・${projectOfAgent.name}` }
+      : { en: `Claude Code · ${projectOfAgent.name}`, ja: `Claude Code・${projectOfAgent.name}` }
     : a.isCeo && a.runtime === 'codex'
       ? { en: 'Codex', ja: 'Codex' } // the CEO's own engine, not their division's
       : company.org.divisions.find((d) => d.id === a.divisionId)?.label
@@ -211,7 +277,7 @@ export function AgentPanel() {
         <span className="mono lg">{monogram(l(a.name))}</span>
         <div>
           <h2>{l(a.name)}</h2>
-          <div className="muted">{l(a.role)}</div>
+          <div className="muted">{subtitle(a, l, t)}</div>
         </div>
       </div>
       {st && (
@@ -230,7 +296,14 @@ export function AgentPanel() {
       )}
       {now && (
         <div className="now">
-          <span className="label">{t('now')}</span>
+          <span className="label">
+            {t('now')}
+            {myWork.length > 0 && (
+              <button className="link small now-stop" onClick={() => setTab('activity')}>
+                {t('wkStop')}…
+              </button>
+            )}
+          </span>
           {now}
         </div>
       )}
@@ -239,6 +312,11 @@ export function AgentPanel() {
           <span className="label">
             {t('now')}
             {st.active.length > 1 && ` · ${st.active.length} ${t('inParallel')}`}
+            {myWork.length > 0 && (
+              <button className="link small now-stop" onClick={() => setTab('activity')}>
+                {t('wkStop')}…
+              </button>
+            )}
           </span>
           <ul className="now-list">
             {st.active.map((w) => (
@@ -286,6 +364,8 @@ export function AgentPanel() {
 
       {tab === 'activity' && (
         <div className="tab-body">
+          <RunningWork agentId={a.id} />
+          <ClearBar count={related.length} onClear={() => cleared.clear(`agent:${a.id}`)} />
           <Timeline events={related} name={name} />
         </div>
       )}
@@ -294,9 +374,34 @@ export function AgentPanel() {
         <section className="tab-body">
           {a.external ? (
             <>
-              <p className="note">{t('repoAgentNote').replace('{file}', `.claude/agents/${a.id}.md`).replace('{project}', company.projects.find((p) => p.id === a.external)?.name ?? '')}</p>
+              <p className="note">{t('repoAgentNote').replace('{file}', `.${a.runtime === 'codex' ? 'codex' : 'claude'}/agents/${a.id}.md`).replace('{project}', company.projects.find((p) => p.id === a.external)?.name ?? '')}</p>
               <h3>{t('about')}</h3>
               <p>{a.description}</p>
+              <div className="remove-agent">
+                <button
+                  className="btn quiet"
+                  disabled={removing}
+                  onClick={async () => {
+                    const where = company.projects.find((p) => p.id === a.external)?.name ?? ''
+                    if (!confirm(t('removeAgentConfirm').replace('{name}', l(a.name)).replace('{project}', where))) return
+                    setRemoving(true)
+                    setRemoveErr(null)
+                    try {
+                      await api('DELETE', `/api/projects/${encodeURIComponent(a.external!)}/agents/${encodeURIComponent(a.id)}`)
+                      select(null)
+                      await company.refreshOrg()
+                    } catch (e) {
+                      setRemoveErr(e instanceof Error ? e.message : String(e))
+                    } finally {
+                      setRemoving(false)
+                    }
+                  }}
+                >
+                  {t('removeAgent')}
+                </button>
+                <p className="hint">{t('removeAgentHint')}</p>
+                {removeErr && <div className="error">{removeErr}</div>}
+              </div>
             </>
           ) : (
             <AgentEditor agent={a} />

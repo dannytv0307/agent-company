@@ -54,24 +54,84 @@ export interface OwnerDef {
     approval?: 'manual' | 'auto'
     /** Language agents use when reporting to the owner. */
     reportLanguage?: string
+    /**
+     * When the organizer stops for the owner's go-ahead (ask_owner):
+     * key — spec, plan and each milestone (default); plan — the plan only; blocked — only when stuck.
+     */
+    checkIns?: CheckIns
+    /** Stop any run, chat reply or task still going after this many minutes (unset = never). */
+    autoStopMinutes?: number
   }
 }
 
-/**
- * Who works on a project:
- * company — the company's own team; project — the repo's own `.claude/agents`;
- * mixed — both (repo specialists + company roles such as HR and the Codex partner).
- */
-export type TeamMode = 'company' | 'project' | 'mixed'
+export type CheckIns = 'key' | 'plan' | 'blocked'
 
-/** A folder the company works in. Agents are shared; each project has its own files and chats. */
+/** Something running that the owner can stop: an organizer run, a 1:1 chat reply, or a delegated task. */
+export interface WorkItem {
+  id: string
+  kind: 'run' | 'chat' | 'task'
+  projectId: string
+  agentId: string
+  /** Who handed a task over. */
+  from?: string
+  engine: 'claude' | 'codex'
+  title: string
+  startedAt: number
+  /** queued: waiting for a free slot (the agent's parallel limit). */
+  status: 'queued' | 'running'
+  runId?: string
+  /** The assignment id its events carry. */
+  aid?: string
+}
+
+export interface RepoCommand {
+  name: string
+  description?: string
+  argumentHint?: string
+}
+
+export type CheckpointKind = 'spec' | 'plan' | 'milestone' | 'decision'
+
+/**
+ * A break point where the organizer stops for the owner: a spec or plan to confirm, a finished
+ * milestone, or a choice. The organizer waits for the answer; a late answer resumes its session.
+ */
+export interface Checkpoint {
+  id: string
+  ts: number
+  projectId: string
+  runId?: string
+  agentId: string
+  kind: CheckpointKind
+  title: string
+  /** Markdown: the spec, the plan, what was done, or the question. */
+  body: string
+  /** A document in the repo with the full text, e.g. docs/spec/booking.md. */
+  file?: string
+  /** For decisions: the choices offered. */
+  options?: string[]
+  status: 'open' | 'answered'
+  /** approve | changes | reply | one of the options */
+  answer?: { decision: string; comment?: string; ts: number }
+}
+
+/** A folder the company works in. Its team is the repo's own `.claude/agents`; the CEO leads every project. */
 export interface ProjectDef {
   id: string
   name: string
   /** Absolute, or relative to the app folder. */
   path: string
-  /** Unset = mixed when the repo has its own agents, otherwise company. */
-  team?: TeamMode
+  /** Extra Claude Code tool rules allowed in this project, e.g. "WebSearch", "WebFetch", "Bash(python *)". */
+  allow?: string[]
+  /** Codex agents may use the network inside their sandbox (scripts that download data, package installs). */
+  codexNetwork?: boolean
+}
+
+/** Permissions the organizer asks for on a project; the owner approves them like a team change. */
+export interface PermissionRequest {
+  /** Claude Code tool rules, e.g. ["WebSearch", "WebFetch", "Bash(python *)"]. */
+  tools?: string[]
+  codexNetwork?: boolean
 }
 
 /** What the repo already brings: rules, its own agents, skills and commands. Read-only. */
@@ -81,9 +141,25 @@ export interface ProjectScan {
   agentsMd: boolean
   settings: boolean
   mcp: boolean
-  agents: { id: string; role: string; description: string; tools?: string[]; model?: string }[]
+  /**
+   * The repo's own agents: .claude/agents (run by Claude Code) and .codex/agents (run by Codex, which has
+   * no agent files of its own — the app runs them with `codex exec`). `created`: written by the app after a hire.
+   */
+  agents: {
+    id: string
+    role: string
+    description: string
+    tools?: string[]
+    model?: string
+    created?: boolean
+    runtime?: 'claude' | 'codex'
+    sandbox?: Sandbox
+    /** Codex agents: the file's body, their working instructions. */
+    prompt?: string
+  }[]
   skills: { name: string; description: string }[]
-  commands: string[]
+  /** Slash commands (.claude/commands), run as `/name args`. */
+  commands: RepoCommand[]
   /** A roadmap document the repo already keeps (e.g. docs/journey.md). */
   roadmap?: string
 }
@@ -93,8 +169,6 @@ export interface ProjectRef extends ProjectDef {
   dir: string
   exists: boolean
   scan?: ProjectScan
-  /** Effective team mode. */
-  mode: TeamMode
 }
 
 export type TaskStatus = 'todo' | 'doing' | 'review' | 'done' | 'blocked'
@@ -136,26 +210,26 @@ export interface OrgDef {
   divisions: DivisionDef[]
 }
 
-/** A role the CEO or HR wants to add. */
+/** An agent the CEO wants on a project's team. Approved, it becomes `.claude/agents/<id>.md` in that repo. */
 export interface HireSpec {
   id: string
-  name: L10n
-  role: L10n
   description: string
   prompt?: string
   tools?: string[]
   model?: string
-  runtime?: Runtime
+  /** claude (default) → .claude/agents; codex → .codex/agents */
+  runtime?: 'claude' | 'codex'
+  /** Codex only: read-only for pure reviewers, workspace-write (default) when it writes files. */
   sandbox?: Sandbox
-  department: { id: string; name?: L10n }
 }
 
-export interface OrgDesign {
-  company?: { name?: L10n; mission?: string; rules?: string }
-  departments: { id: string; name: L10n; members: Omit<HireSpec, 'department'>[] }[]
+/** A whole team for one project, proposed in one go. */
+export interface TeamDesign {
+  agents: HireSpec[]
 }
 
-export type ProposalKind = 'design' | 'hire' | 'dismiss'
+/** design = a team for the project; hire / dismiss = one agent in or out; permission = tools for the project. */
+export type ProposalKind = 'design' | 'hire' | 'dismiss' | 'permission'
 
 export interface Proposal {
   id: string
@@ -164,10 +238,11 @@ export interface Proposal {
   from: string
   reason: string
   status: 'pending' | 'approved' | 'rejected'
-  design?: OrgDesign
+  design?: TeamDesign
   hire?: HireSpec
   dismiss?: { id: string }
-  /** Project of the run that proposed it, when there was one. */
+  permission?: PermissionRequest
+  /** The project whose team changes. */
   projectId?: string
 }
 
@@ -180,6 +255,10 @@ export interface ChatMessage {
   projectId?: string
   /** The agent asked the owner something (message_owner) and waits for an answer. */
   ask?: boolean
+  /** The message announces a checkpoint the owner answers in place. */
+  checkpointId?: string
+  /** The message announces a team change the owner approves in place. */
+  proposalId?: string
 }
 
 /** One project as seen from the portfolio. */
@@ -188,7 +267,8 @@ export interface ProjectSummary {
   name: string
   dir: string
   exists: boolean
-  mode: TeamMode
+  /** How many agents the repo's team has. */
+  team: number
   running: boolean
   progress: { done: number; total: number; pct: number }
   counts: Record<TaskStatus, number>
@@ -197,7 +277,7 @@ export interface ProjectSummary {
   working: { agentId: string; title: string }[]
   lastActivity?: number
   costUsd: number
-  needs: { approvals: number; questions: number; blocked: number; manual: number }
+  needs: { approvals: number; decisions: number; questions: number; blocked: number; manual: number }
 }
 
 export interface FileChange {

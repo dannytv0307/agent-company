@@ -1,4 +1,5 @@
 // Runs Claude Code headless (`claude -p`, stream-json in and out) and maps its stream to events.
+import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { AgentRef, OrgDef, ProjectRef } from '../../shared/types.ts'
@@ -77,7 +78,7 @@ function startClaude(org: OrgDef, first: string, o: StartOpts) {
   if (o.model) args.push('--model', o.model)
   if (o.resume) args.push('--resume', o.resume)
   // Variadic flag goes last; prompts are streamed on stdin.
-  const allow = division.permissions?.allow ?? []
+  const allow = [...new Set([...(division.permissions?.allow ?? []), ...(o.project.allow ?? [])])]
   if (allow.length) args.push('--allowedTools', ...allow)
 
   const child = spawnCli(bin, args, {
@@ -180,6 +181,12 @@ function startClaude(org: OrgDef, first: string, o: StartOpts) {
     }
 
     if (msg.type === 'result') {
+      // Tools the session wanted but was not allowed (headless runs cannot ask): the app turns these
+      // into a permission request for the owner.
+      const denied = Array.isArray(msg.permission_denials) ? (msg.permission_denials as { tool_name?: string; tool_input?: Record<string, unknown> }[]) : []
+      if (denied.length) {
+        bus.emit({ runId, kind: 'system', agent: o.agentId, text: `Not allowed: ${[...new Set(denied.map((d) => d.tool_name))].join(', ')}`, meta: { permissionDenied: denied.map((d) => ({ tool: d.tool_name, input: d.tool_input })) } })
+      }
       results++
       const ok = msg.subtype === 'success' && !msg.is_error
       lastResult = String(msg.result ?? '')
@@ -219,12 +226,22 @@ function startClaude(org: OrgDef, first: string, o: StartOpts) {
 
 export type ClaudeRun = ReturnType<typeof startClaude>
 
-/** The company run: the owner's task goes to the CEO, who delegates to the team. */
-export function runClaudeCeo(org: OrgDef, runId: string, task: string, project: ProjectRef): ClaudeRun {
+/**
+ * The company run: the owner's task goes to the organizer, who delegates to the team. `resume`
+ * continues an earlier run's session (e.g. with the owner's late answer to a check-in).
+ */
+export function runClaudeCeo(
+  org: OrgDef,
+  runId: string,
+  task: string,
+  project: ProjectRef,
+  o: { resume?: string; onSession?: (id: string) => void } = {},
+): ClaudeRun {
   const ceo = org.divisions.find((d) => d.runtime === 'claude' && d.ceo)?.ceo
   if (!ceo) throw new Error('org.yaml has no Claude division with a CEO')
-  const first = `[Project: ${project.name} — the current folder]\n\n${task}`
-  const run = startClaude(org, first, { runId, project, agentId: ceo.id, isCeo: true, model: ceo.model, reportResults: true })
+  // A slash command must be the whole message for Claude Code to run it.
+  const first = o.resume || task.startsWith('/') ? task : `[Project: ${project.name} — the current folder]\n\n${task}`
+  const run = startClaude(org, first, { runId, project, agentId: ceo.id, isCeo: true, model: ceo.model, reportResults: true, resume: o.resume, onSession: o.onSession })
   run.done
     .catch((e) => bus.emit({ runId, kind: 'error', agent: ceo.id, text: short(e instanceof Error ? e.message : String(e), 200) }))
     .finally(() => bus.emit({ runId, kind: 'system', text: 'Run finished', meta: { end: true } }))
@@ -237,9 +254,9 @@ export function runClaudeDirect(
   org: OrgDef,
   agent: AgentRef,
   prompt: string,
-  o: { runId: string; project: ProjectRef; resume?: string; onSession: (id: string) => void },
+  o: { runId: string; project: ProjectRef; resume?: string; onSession: (id: string) => void; onChild?: (c: ChildProcess) => void },
 ): Promise<string> {
-  return startClaude(org, prompt, {
+  const run = startClaude(org, prompt, {
     runId: o.runId,
     project: o.project,
     agentId: agent.id,
@@ -248,7 +265,9 @@ export function runClaudeDirect(
     resume: o.resume,
     onSession: o.onSession,
     reportResults: false,
-  }).done
+  })
+  o.onChild?.(run.child)
+  return run.done
 }
 
 /**
@@ -260,9 +279,9 @@ export function runClaudeTask(
   org: OrgDef,
   agent: AgentRef,
   prompt: string,
-  o: { runId: string; project: ProjectRef; aid: string; taskId?: string },
+  o: { runId: string; project: ProjectRef; aid: string; taskId?: string; onChild?: (c: ChildProcess) => void },
 ): Promise<string> {
-  return startClaude(org, prompt, {
+  const run = startClaude(org, prompt, {
     runId: o.runId,
     project: o.project,
     agentId: agent.id,
@@ -271,5 +290,7 @@ export function runClaudeTask(
     reportResults: false,
     aid: o.aid,
     taskId: o.taskId,
-  }).done
+  })
+  o.onChild?.(run.child)
+  return run.done
 }

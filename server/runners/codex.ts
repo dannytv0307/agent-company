@@ -5,6 +5,7 @@ import type { ChildProcess } from 'node:child_process'
 import type { AgentRef, OrgDef, Sandbox } from '../../shared/types.ts'
 import { bus } from '../events.ts'
 import { MCP_SERVER, PORT, persona } from '../compile.ts'
+import { projectsOf } from '../org.ts'
 import { onLines, resolveBin, spawnCli } from '../proc.ts'
 import { short } from './summarize.ts'
 
@@ -65,6 +66,8 @@ export function runCodexAgent(org: OrgDef, agent: AgentRef, from: string, task: 
   const args = opts.resume
     ? ['exec', 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`]
     : ['exec', '--json', '--skip-git-repo-check', '-C', opts.dir, '-s', sandbox]
+  // The project may let Codex scripts reach the network (downloads, APIs) inside the sandbox.
+  if (projectsOf(org).find((p) => p.dir === path.resolve(opts.dir))?.codexNetwork) args.push('-c', 'sandbox_workspace_write.network_access=true')
   // A Claude model name (opus, sonnet, haiku, claude-…) means nothing to Codex — use its default.
   if (agent.model && !/^(opus|sonnet|haiku|claude)/i.test(agent.model)) args.push('-m', agent.model)
   // Every Codex agent gets the company MCP tools (inbox, messaging the owner; the lead also delegates).
@@ -107,7 +110,8 @@ export function runCodexAgent(org: OrgDef, agent: AgentRef, from: string, task: 
       } else if (ev.type === 'item.started' && item.type === 'command_execution') {
         say(`$ ${short(cleanCommand(item.command), 56)}`)
       } else if (ev.type === 'item.started' && item.type === 'mcp_tool_call') {
-        if (!['delegate', 'check_messages'].includes(item.tool)) say(`Using ${item.server}.${item.tool}`)
+        if (item.tool === 'ask_owner') say('⏸ Waiting for your answer')
+        else if (!['delegate', 'check_messages'].includes(item.tool)) say(`Using ${item.server}.${item.tool}`)
       } else if (ev.type === 'item.completed') {
         if (item.type === 'agent_message' && item.text) {
           last = item.text

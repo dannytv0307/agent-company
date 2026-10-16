@@ -1,6 +1,6 @@
-// Agent Company MCP server (stdio). Claude Code and Codex load it to delegate across divisions,
-// change the org (CEO/HR), and talk with the owner. Every call goes through the app, so the
-// dashboard sees each hand-off.
+// Agent Company MCP server (stdio). Claude Code and Codex load it to delegate to a project's team,
+// build that team (organizer), keep the plan, and talk with the owner. Every call goes through the app,
+// so the dashboard sees each hand-off.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
@@ -19,28 +19,25 @@ const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(bo
 const text = (t) => ({ content: [{ type: 'text', text: t }] })
 const fail = (e) => ({ ...text(`Failed: ${e.message}`), isError: true })
 
-const l10n = z.object({ en: z.string(), ja: z.string() })
-const runtime = z.enum(['claude', 'codex', 'antigravity'])
-const role = {
-  id: z.string().describe('Short lowercase handle, letters/digits/-'),
-  name: l10n.describe('Friendly first name in English and Japanese'),
-  role: l10n.describe('Job title in English and Japanese'),
-  description: z.string().describe('"<Role>. Use for …" — tells managers when to delegate to this person'),
-  prompt: z.string().optional().describe('2–5 lines of working instructions for this business'),
-  tools: z.array(z.string()).optional().describe('Least-privilege tool list, e.g. ["Read","Write","Edit","Glob","Grep","WebSearch"]'),
-  model: z.string().optional().describe('claude: opus | sonnet | haiku. Omit for the default.'),
-  runtime: runtime.optional().describe('claude (default) | codex | antigravity (manual)'),
+// One agent of a project's team; approved, it becomes .claude/agents/<id>.md in the repo.
+const agentSpec = {
+  id: z.string().describe('Short lowercase handle that says the role, e.g. "api-engineer", "level-designer"'),
+  description: z.string().describe('"<Role>. Use for …" — tells the organizer when to delegate to this agent'),
+  prompt: z.string().optional().describe('3–8 lines of working instructions specific to this project (stack, conventions, done criteria)'),
+  tools: z.array(z.string()).optional().describe('Least-privilege tool list, e.g. ["Read","Write","Edit","Glob","Grep","Bash"]. Omit to inherit all tools.'),
+  model: z.string().optional().describe('Claude: opus | sonnet | haiku. Codex: a Codex model name, or omit. Omit for the default.'),
+  runtime: z.enum(['claude', 'codex']).optional().describe('claude (default) → .claude/agents; codex → .codex/agents, for independent reviews and second opinions'),
+  sandbox: z.enum(['read-only', 'workspace-write']).optional().describe('Codex only: read-only for pure reviewers; workspace-write (default) when it writes files'),
 }
 
-const server = new McpServer({ name: 'agent-company', version: '0.3.0' })
+const server = new McpServer({ name: 'agent-company', version: '0.4.0' })
 
 server.registerTool(
   'list_colleagues',
-  { description: "List everyone you can work with: the company's agents and this project's own repo agents (id, role, department, runtime)." },
+  { description: "List everyone you can work with: the organizer and this project's team (its .claude/agents)." },
   async () => {
     const { agents } = await api(`/api/colleagues?runId=${encodeURIComponent(RUN ?? '')}`)
-    const where = (a) => (a.external ? 'repo team' : (a.departmentId ?? 'leadership'))
-    return text(agents.map((a) => `${a.id} — ${a.external ? a.role.en : `${a.name.en}, ${a.role.en}`} [${where(a)}] (${a.runtime}${a.manual ? ', manual' : ''})`).join('\n'))
+    return text(agents.map((a) => `${a.id} — ${a.external ? a.role.en : `${a.name.en}, ${a.role.en}`} (${a.runtime}${a.manual ? ', manual' : ''})`).join('\n'))
   },
 )
 
@@ -48,8 +45,7 @@ server.registerTool(
   'delegate',
   {
     description:
-      'Delegate a focused task to an agent in another division (e.g. the Codex partner) and wait for their report. ' +
-      'Manual agents (Antigravity) get the task queued for the owner and this returns immediately.',
+      "Delegate a focused task to an agent of this project's team and wait for their report.",
     inputSchema: {
       from: z.string().describe('Your own agent id'),
       to: z.string().describe('Target agent id'),
@@ -101,26 +97,20 @@ server.registerTool(
 )
 
 server.registerTool(
-  'propose_org',
+  'propose_team',
   {
     description:
-      'CEO only. Propose the complete company structure for the owner\'s business in ONE call: departments and the roles in each. ' +
-      'Replaces all non-core departments when approved (the CEO and HR always stay).',
+      "Organizer only. Propose a team of agents for THIS project in one call. Approved, each becomes .claude/agents/<id>.md in the repo " +
+      '(existing agents are kept). Waits for the owner unless they auto-approve.',
     inputSchema: {
       from: z.string().describe('Your own agent id'),
-      reason: z.string().describe('One or two sentences: why this structure fits the business'),
-      company: z
-        .object({ name: l10n.optional(), mission: z.string().optional().describe('What the business does, in one or two sentences') })
-        .optional(),
-      departments: z
-        .array(z.object({ id: z.string(), name: l10n, members: z.array(z.object(role)).min(1) }))
-        .min(1)
-        .describe('3–7 departments with 1–3 roles each'),
+      reason: z.string().describe("One or two sentences: why this team fits the project's work"),
+      agents: z.array(z.object(agentSpec)).min(1).max(8).describe('2–6 agents, each with one clear responsibility'),
     },
   },
-  async ({ from, reason, company, departments }) => {
+  async ({ from, reason, agents }) => {
     try {
-      return text((await post('/api/proposals', { kind: 'design', from, reason, design: { company, departments }, runId: RUN })).message)
+      return text((await post('/api/proposals', { kind: 'design', from, reason, design: { agents }, runId: RUN })).message)
     } catch (e) {
       return fail(e)
     }
@@ -130,17 +120,12 @@ server.registerTool(
 server.registerTool(
   'hire',
   {
-    description: 'HR/CEO. Hire one new agent into a department (existing id, or a new id with a name). Waits for owner approval unless auto-approved.',
-    inputSchema: {
-      from: z.string().describe('Your own agent id'),
-      reason: z.string().describe('Why this role is needed now'),
-      ...role,
-      department: z.object({ id: z.string(), name: l10n.optional().describe('Required when creating a new department') }),
-    },
+    description: "Organizer only. Add one agent to this project's team (.claude/agents/<id>.md). Waits for the owner unless they auto-approve.",
+    inputSchema: { from: z.string().describe('Your own agent id'), reason: z.string().describe('Why this agent is needed now'), ...agentSpec },
   },
-  async ({ from, reason, department, ...spec }) => {
+  async ({ from, reason, ...spec }) => {
     try {
-      return text((await post('/api/proposals', { kind: 'hire', from, reason, hire: { ...spec, department }, runId: RUN })).message)
+      return text((await post('/api/proposals', { kind: 'hire', from, reason, hire: spec, runId: RUN })).message)
     } catch (e) {
       return fail(e)
     }
@@ -150,12 +135,34 @@ server.registerTool(
 server.registerTool(
   'dismiss',
   {
-    description: 'HR/CEO. Remove an agent who is no longer needed. Core roles (CEO, HR) cannot be dismissed.',
-    inputSchema: { from: z.string(), reason: z.string(), id: z.string().describe('Agent id to dismiss') },
+    description: "Organizer only. Remove an agent from this project's team. Waits for the owner unless they auto-approve; the file is moved to .agent-company/removed-agents/, not deleted.",
+    inputSchema: { from: z.string(), reason: z.string(), id: z.string().describe('Agent id to remove') },
   },
   async ({ from, reason, id }) => {
     try {
       return text((await post('/api/proposals', { kind: 'dismiss', from, reason, dismiss: { id }, runId: RUN })).message)
+    } catch (e) {
+      return fail(e)
+    }
+  },
+)
+
+server.registerTool(
+  'request_permission',
+  {
+    description:
+      "Organizer only. Ask the owner to allow tools in THIS project when you or a team member was refused one (e.g. WebSearch, WebFetch, a Bash command), " +
+      'or when Codex agents need network access inside their sandbox (downloads, APIs). Waits for the owner unless they auto-approve; approved permissions apply from the next session, so re-run the affected tasks afterwards.',
+    inputSchema: {
+      from: z.string().describe('Your own agent id'),
+      reason: z.string().describe('What the team needs it for, in one or two sentences'),
+      tools: z.array(z.string()).optional().describe('Claude Code permission rules, as narrow as works: "WebSearch", "WebFetch", "WebFetch(domain:example.com)", "Bash(python *)"'),
+      codex_network: z.boolean().optional().describe('true: let Codex agents use the network inside their sandbox'),
+    },
+  },
+  async ({ from, reason, tools, codex_network }) => {
+    try {
+      return text((await post('/api/proposals', { kind: 'permission', from, reason, permission: { tools, codexNetwork: codex_network }, runId: RUN })).message)
     } catch (e) {
       return fail(e)
     }
@@ -240,6 +247,48 @@ server.registerTool(
     try {
       const { notes } = await post(`/api/inbox/${encodeURIComponent(agent_id)}/read`, {})
       return text(notes.length ? notes.map((n, i) => `${i + 1}. ${n}`).join('\n') : 'No new messages from the owner.')
+    } catch (e) {
+      return fail(e)
+    }
+  },
+)
+
+// How long ask_owner waits before telling the organizer to pause (tool calls time out at 30 minutes).
+const ASK_WAIT_MS = 25 * 60_000
+
+server.registerTool(
+  'ask_owner',
+  {
+    description:
+      'Stop at a check-in and get the owner\'s decision: a spec or plan to confirm, a finished milestone, or a choice between options. ' +
+      'Shows the owner a card with Approve / Request changes (or your options) and WAITS for the answer. ' +
+      'If the owner does not answer in time it says so: then end your turn with a short status; their answer will resume your session. ' +
+      'For a heads-up that needs no answer, use message_owner instead.',
+    inputSchema: {
+      agent_id: z.string().describe('Your own agent id'),
+      kind: z.enum(['spec', 'plan', 'milestone', 'decision']),
+      title: z.string().describe('One line, e.g. "Booking flow — spec v1" or "M1 done: login works"'),
+      body: z
+        .string()
+        .describe('Markdown the owner reads before deciding (max ~30 lines): spec = goal, scope, out of scope, acceptance criteria, open questions; plan = milestones, tasks, owners, risks; milestone = what was delivered, how to check it, next; decision = the question and trade-offs.'),
+      file: z.string().optional().describe('Path (relative to the project) of a document with the full text, if you wrote one'),
+      options: z.array(z.string()).min(2).max(4).optional().describe('For decisions: the choices, shortest first'),
+    },
+  },
+  async ({ agent_id, ...input }) => {
+    try {
+      const { id } = await post('/api/checkpoints', { agentId: agent_id, ...input, runId: RUN })
+      const deadline = Date.now() + ASK_WAIT_MS
+      while (Date.now() < deadline) {
+        const r = await post(`/api/checkpoints/${id}/poll`, {})
+        if (r.text) return text(r.text)
+        if (r.status !== 'open') return text('This check-in was replaced or closed without an answer. Continue with what you know, or check in again.')
+        await new Promise((res) => setTimeout(res, 3000))
+      }
+      return text(
+        'No answer from the owner yet. Do not continue past this check-in: end your turn now with two or three lines on where things stand. ' +
+          "The owner's answer will resume this session.",
+      )
     } catch (e) {
       return fail(e)
     }

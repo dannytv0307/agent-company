@@ -4,6 +4,38 @@ import { api } from '../api.ts'
 import { useT } from '../i18n.ts'
 import { useCompanyCtx } from '../context.ts'
 
+/**
+ * "Browse…": the server opens the operating system's folder dialog (a browser cannot reveal real
+ * paths) and fills in the chosen folder.
+ */
+function BrowseButton({ start, onPick }: { start?: string; onPick: (path: string) => void }) {
+  const { t } = useT()
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const pick = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await api<{ path?: string; cancelled?: boolean }>('POST', '/api/pick-folder', { start, title: t('pickTitle') })
+      if (r.path) onPick(r.path)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <button className="btn browse" disabled={busy} onClick={pick} title={busy ? t('pickOpen') : undefined}>
+        {busy ? t('pickOpen') : t('browse')}
+      </button>
+      {err && <p className="error browse-err">{err}</p>}
+    </>
+  )
+}
+
+const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? ''
+
 async function remove(id: string) {
   const res = await fetch(`/api/projects/${id}`, { method: 'DELETE', headers: { 'x-agent-company': '1' } })
   const data = await res.json().catch(() => ({}))
@@ -37,7 +69,10 @@ function Row({ p }: { p: ProjectRef }) {
       {editing ? (
         <div className="project-edit">
           <input value={name} onChange={(e) => setName(e.target.value)} aria-label={t('projectName')} />
-          <input className="mono-input" value={folder} spellCheck={false} onChange={(e) => setFolder(e.target.value)} aria-label={t('folder')} />
+          <div className="folder-field">
+            <input className="mono-input" value={folder} spellCheck={false} onChange={(e) => setFolder(e.target.value)} aria-label={t('folder')} />
+            <BrowseButton start={p.dir} onPick={setFolder} />
+          </div>
           <div className="row">
             <button className="btn solid" onClick={() => run(() => api('PUT', `/api/projects/${p.id}`, { name, path: folder }), t('saved'))}>
               {t('save')}
@@ -68,6 +103,31 @@ function Row({ p }: { p: ProjectRef }) {
         </>
       )}
       {!editing && p.scan && <RepoSummary p={p} />}
+      {!editing && (p.allow?.length || p.codexNetwork) ? (
+        <div className="repo-summary">
+          <span className="label">{t('permissions')}</span>
+          {(p.allow ?? []).map((r) => (
+            <span key={r} className="repo-chip file perm-on">
+              {r}
+              <button
+                className="chip-x"
+                title={t('revoke')}
+                onClick={() => run(() => api('PUT', `/api/projects/${p.id}/permissions`, { allow: (p.allow ?? []).filter((x) => x !== r), codexNetwork: p.codexNetwork }))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {p.codexNetwork && (
+            <span className="repo-chip perm-on">
+              {t('codexNetwork')}
+              <button className="chip-x" title={t('revoke')} onClick={() => run(() => api('PUT', `/api/projects/${p.id}/permissions`, { allow: p.allow ?? [], codexNetwork: false }))}>
+                ×
+              </button>
+            </span>
+          )}
+        </div>
+      ) : null}
       {msg && <p className={msg.ok ? 'hint ok' : 'error'}>{msg.text}</p>}
     </li>
   )
@@ -75,10 +135,7 @@ function Row({ p }: { p: ProjectRef }) {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-/**
- * What the repo already brings. (The "who works here" switch is hidden for now: repo agents have
- * their own frame and both the CEO and company members can direct them, so "both" is the default.)
- */
+/** What the repo already brings: its rules, its team (.claude/agents), skills and commands. */
 function RepoSummary({ p }: { p: ProjectRef }) {
   const { t } = useT()
   const s = p.scan!
@@ -153,7 +210,16 @@ export function ProjectsModal({ onClose }: { onClose: () => void }) {
           <h3>{t('newProject')}</h3>
           <div className="project-add">
             <input value={name} placeholder={t('projectName')} onChange={(e) => setName(e.target.value)} />
-            <input className="mono-input" value={folder} spellCheck={false} placeholder="C:\Users\you\projects\website" onChange={(e) => setFolder(e.target.value)} />
+            <div className="folder-field">
+              <input className="mono-input" value={folder} spellCheck={false} placeholder="C:\Users\you\projects\website" onChange={(e) => setFolder(e.target.value)} />
+              <BrowseButton
+                start={folder.trim() || undefined}
+                onPick={(path) => {
+                  setFolder(path)
+                  if (!name.trim()) setName(folderName(path))
+                }}
+              />
+            </div>
             <button className="btn solid" disabled={!name.trim() || !folder.trim()} onClick={add}>
               {t('add')}
             </button>

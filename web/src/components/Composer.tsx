@@ -3,6 +3,7 @@ import { post } from '../api.ts'
 import { useT } from '../i18n.ts'
 import { useCompanyCtx } from '../context.ts'
 import { monogram } from './OrgChart.tsx'
+import { useCommandMenu } from './CommandMenu.tsx'
 
 export function Composer() {
   const { company, select } = useCompanyCtx()
@@ -34,8 +35,9 @@ export function Composer() {
     })
 
   const canRun = !busy && !company.running && !!task.trim() && !!claude?.installed
-  // A fresh company has only its core roles (CEO, HR, partner): invite the owner to describe the business.
-  const blank = company.agents.length > 0 && company.agents.every((a) => a.core || a.isCeo)
+  const commands = useCommandMenu(task, setTask, company.project?.scan?.commands ?? [])
+  // A project without a team yet: invite the owner to have the CEO propose one.
+  const blank = !!company.project && company.repoTeam.length === 0
   const onDuty = company.agents
     .filter((a) => company.states[a.id]?.status === 'working')
     .sort((x, y) => (company.states[y.id]?.lastTs ?? 0) - (company.states[x.id]?.lastTs ?? 0))
@@ -43,6 +45,7 @@ export function Composer() {
   return (
     <section className="composer">
       <div className="composer-box">
+        {commands.menu}
         <span className="to">
           {l(ceo?.name)}
           {ceoEngine && <em> · {ceoEngine}</em>}
@@ -53,6 +56,7 @@ export function Composer() {
           placeholder={blank ? t('composerBlank') : t('composer')}
           onChange={(e) => setTask(e.target.value)}
           onKeyDown={(e) => {
+            if (commands.onKeyDown(e)) return
             if (e.key === 'Enter' && canRun) void run()
           }}
         />

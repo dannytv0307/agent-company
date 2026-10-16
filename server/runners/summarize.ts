@@ -26,6 +26,10 @@ export function summarizeClaudeTool(name: string, input: Record<string, unknown>
       return `Researching ${short(input.query ?? input.url, 48)}`
     case 'TodoWrite':
       return 'Updating the plan'
+    case 'mcp__agent-company__ask_owner':
+      return `⏸ Waiting for your answer: ${short(input.title, 50)}`
+    case 'Skill':
+      return `Running /${short(input.skill ?? input.command, 40)}`
     default:
       if (name.startsWith('mcp__')) return `Using ${name.split('__').slice(1).join('.')}`
       return `Using ${name}`

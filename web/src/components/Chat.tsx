@@ -3,6 +3,9 @@ import type { AgentRef, ChatMessage } from '../../../shared/types.ts'
 import { api, get, post } from '../api.ts'
 import { useT } from '../i18n.ts'
 import { hhmm, useCompanyCtx } from '../context.ts'
+import { CheckIn } from './CheckIn.tsx'
+import { ProposalCard } from './ProposalCard.tsx'
+import { useCommandMenu } from './CommandMenu.tsx'
 
 export function Chat({ agent }: { agent: AgentRef }) {
   const { company } = useCompanyCtx()
@@ -50,8 +53,21 @@ export function Chat({ agent }: { agent: AgentRef }) {
   }, [loaded, company.events, agent.id, pid])
 
   const multi = company.projects.length > 1
+  // Claude agents run the repo's slash commands themselves; Codex gets them expanded by the app.
+  const commands = useCommandMenu(text, setText, company.project?.scan?.commands ?? [])
   const pending = messages.length > 0 && messages[messages.length - 1].role === 'owner'
   const st = company.states[agent.id]
+  // The server has nothing running for this agent here, yet no reply came: it was lost (e.g. a restart).
+  const working = company.work.some((w) => w.agentId === agent.id && w.projectId === pid)
+  const stalled = pending && !working && company.connected && company.now - messages[messages.length - 1].ts > 20_000
+  const retry = async () => {
+    setErr(null)
+    try {
+      await post(`/api/chat/${agent.id}/retry`, { projectId: company.project?.id })
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' })
@@ -95,8 +111,12 @@ export function Chat({ agent }: { agent: AgentRef }) {
       )}
       <div className="chat-log">
         {messages.length === 0 && <p className="muted small chat-empty">{t('chatEmpty')}</p>}
-        {messages.map((m) =>
-          m.role === 'note' ? (
+        {messages.map((m) => {
+          const cp = m.checkpointId ? company.checkpoints.find((c) => c.id === m.checkpointId) : undefined
+          if (cp) return <CheckIn key={m.id} cp={cp} inChat />
+          const proposal = m.proposalId ? company.proposals.find((p) => p.id === m.proposalId) : undefined
+          if (proposal) return <ProposalCard key={m.id} p={proposal} inChat />
+          return m.role === 'note' ? (
             <div key={m.id} className="note-line">
               {m.text}
             </div>
@@ -109,9 +129,17 @@ export function Chat({ agent }: { agent: AgentRef }) {
                 </span>
               </div>
             </div>
-          ),
+          )
+        })}
+        {stalled && (
+          <div className="note-line stalled">
+            {t('noReply')}{' '}
+            <button className="link small" onClick={retry}>
+              {t('retry')}
+            </button>
+          </div>
         )}
-        {pending && (
+        {pending && !stalled && (
           <div className="typing">
             <span className="dots">
               <i />
@@ -126,6 +154,7 @@ export function Chat({ agent }: { agent: AgentRef }) {
       </div>
       {err && <div className="error">{err}</div>}
       <div className="chat-input">
+        {commands.menu}
         <textarea
           rows={1}
           value={text}
@@ -133,6 +162,7 @@ export function Chat({ agent }: { agent: AgentRef }) {
           disabled={agent.manual}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
+            if (commands.onKeyDown(e)) return
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               void send()
