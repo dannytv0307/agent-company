@@ -82,32 +82,37 @@ function App() {
             }}
             onConfigs={() => setConfigs(true)}
           />
-          <Composer />
-          <main className={`stage${Object.values(company.states).some((s) => s.status === 'working') ? ' busy' : ''}`}>
-            {view === 'org' && (
-              <ReactFlowProvider>
-                <OrgChart />
-              </ReactFlowProvider>
-            )}
-            {view === 'portfolio' && (
-              <Portfolio
-                onOpen={(id) => {
-                  void company.selectProject(id)
-                  setView('project')
-                }}
-              />
-            )}
-            {view === 'project' && (
-              <ProjectPage
-                onBack={() => setView('portfolio')}
-                onOrg={() => {
-                  setFocus(true)
-                  setView('org')
-                }}
-              />
-            )}
+          {/* The work area and the side panel sit side by side: opening a panel narrows the chart instead of covering it. */}
+          <div className="body">
+            <div className="work">
+              <Composer />
+              <main className={`stage${Object.values(company.states).some((s) => s.status === 'working') ? ' busy' : ''}`}>
+                {view === 'org' && (
+                  <ReactFlowProvider>
+                    <OrgChart />
+                  </ReactFlowProvider>
+                )}
+                {view === 'portfolio' && (
+                  <Portfolio
+                    onOpen={(id) => {
+                      void company.selectProject(id)
+                      setView('project')
+                    }}
+                  />
+                )}
+                {view === 'project' && (
+                  <ProjectPage
+                    onBack={() => setView('portfolio')}
+                    onOrg={() => {
+                      setFocus(true)
+                      setView('org')
+                    }}
+                  />
+                )}
+              </main>
+            </div>
             <AgentPanel />
-          </main>
+          </div>
           {configs && <ConfigModal onClose={closeConfigs} />}
           {projectsOpen && <ProjectsModal onClose={closeProjects} />}
         </div>
@@ -115,6 +120,10 @@ function App() {
     </LangContext.Provider>
   )
 }
+
+// The side panel's width, as the owner last dragged it.
+const dock = Number(load('dock'))
+if (dock >= 340) document.documentElement.style.setProperty('--dock', `${dock}px`)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

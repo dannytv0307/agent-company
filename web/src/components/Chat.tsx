@@ -7,47 +7,49 @@ import { hhmm, useCompanyCtx } from '../context.ts'
 export function Chat({ agent }: { agent: AgentRef }) {
   const { company } = useCompanyCtx()
   const { t, l } = useT()
-  const [loaded, setLoaded] = useState<ChatMessage[]>([])
+  // The server's copy of the thread, and when it was asked for. Only messages newer than that are
+  // taken from the event stream: older copies there may belong to a conversation that was cleared.
+  const [loaded, setLoaded] = useState<{ messages: ChatMessage[]; since: number }>({ messages: [], since: Infinity })
   const [text, setText] = useState('')
   const [err, setErr] = useState<string | null>(null)
-  const [clearedAt, setClearedAt] = useState(0)
   const bottom = useRef<HTMLDivElement>(null)
-  const pid = company.project?.id
+  const latest = useRef(agent.id)
+  const pid = company.project?.id ?? ''
 
-  const reload = () =>
-    get<{ messages: ChatMessage[] }>(`/api/chat/${agent.id}`)
-      .then((r) => setLoaded(r.messages))
+  const reload = () => {
+    const id = agent.id
+    const since = Date.now()
+    return get<{ messages: ChatMessage[] }>(`/api/chat/${id}`)
+      .then((r) => latest.current === id && setLoaded({ messages: r.messages, since })) // ignore answers for an agent we already left
       .catch((e) => setErr(String(e.message ?? e)))
+  }
 
   useEffect(() => {
-    setLoaded([])
+    latest.current = agent.id
+    setLoaded({ messages: [], since: Infinity })
     setErr(null)
-    setClearedAt(0)
     void reload()
   }, [agent.id])
 
-  // Cleared elsewhere (another window): start over from the server's copy.
-  const lastClear = company.events.findLast((e) => e.meta?.chatCleared === agent.id && e.projectId === pid)
+  // Cleared in another window: start over from the server's copy.
+  const lastClear = company.events.findLast((e) => e.meta?.chatCleared === agent.id)
   useEffect(() => {
-    if (!lastClear) return
-    setClearedAt((c) => Math.max(c, lastClear.ts))
-    void reload()
+    if (lastClear) void reload()
   }, [lastClear?.id])
 
-  // History from the server, plus anything that arrived live over the event stream.
+  // The conversation in the selected project only: each project has its own session with the agent,
+  // so a clear empties exactly what is on screen.
   const messages = useMemo(() => {
     const live = company.events
       .filter((e) => e.kind === 'chat' && e.agent === agent.id && e.meta?.message)
       .map((e) => e.meta!.message as ChatMessage)
-      // Live copies of messages that were cleared in this project must not come back.
-      .filter((m) => !(m.ts <= clearedAt && (!m.projectId || m.projectId === pid)))
+      .filter((m) => m.ts >= loaded.since)
     const byId = new Map<string, ChatMessage>()
-    for (const m of [...loaded, ...live]) byId.set(m.id, m)
+    for (const m of [...loaded.messages, ...live]) if (!m.projectId || m.projectId === pid) byId.set(m.id, m)
     return [...byId.values()].sort((a, b) => a.ts - b.ts)
-  }, [loaded, company.events, agent.id, clearedAt, pid])
+  }, [loaded, company.events, agent.id, pid])
 
   const multi = company.projects.length > 1
-  const projectName = (id: string) => company.projects.find((p) => p.id === id)?.name ?? id
   const pending = messages.length > 0 && messages[messages.length - 1].role === 'owner'
   const st = company.states[agent.id]
 
@@ -61,7 +63,8 @@ export function Chat({ agent }: { agent: AgentRef }) {
     setErr(null)
     try {
       const r = await api<{ clearedAt: number }>('DELETE', `/api/chat/${agent.id}?project=${encodeURIComponent(pid ?? '')}`)
-      setClearedAt(r.clearedAt)
+      // Drop this project's messages right away; the reload confirms what the server kept.
+      setLoaded((l) => ({ messages: l.messages.filter((m) => m.projectId && m.projectId !== pid), since: r.clearedAt }))
       await reload()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -103,7 +106,6 @@ export function Chat({ agent }: { agent: AgentRef }) {
                 <p>{m.text}</p>
                 <span className="t">
                   {m.role === 'owner' ? t('you') : l(agent.name)} · {hhmm(m.ts)}
-                  {multi && m.projectId && ` · ${projectName(m.projectId)}`}
                 </span>
               </div>
             </div>

@@ -165,7 +165,7 @@ function PulseEdge(props: EdgeProps<FlowEdge>) {
 }
 
 // Never blow a small company up past 100%.
-const FIT = { padding: 0.04, maxZoom: 1 }
+const FIT = { padding: 0.06, maxZoom: 1 }
 
 const nodeTypes = { agent: AgentNode, owner: OwnerNode, dept: DeptNode, division: DivisionNode }
 const edgeTypes = { pulse: PulseEdge }
@@ -175,19 +175,23 @@ export function OrgChart() {
   const { layout, pulses } = company
   const { fitView } = useReactFlow()
 
-  // Keep the whole company in view when the window is resized.
+  // Keep the whole company in view whenever the chart's area changes size: the window, or the side
+  // panel opening, closing or being dragged wider.
+  const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    const el = box.current
+    if (!el) return
     let t: ReturnType<typeof setTimeout>
-    const onResize = () => {
+    const ro = new ResizeObserver(() => {
       clearTimeout(t)
-      t = setTimeout(() => void fitView({ ...FIT, duration: 200 }), 120)
-    }
-    window.addEventListener('resize', onResize)
+      t = setTimeout(() => void fitView({ ...FIT, duration: document.body.classList.contains('resizing') ? 0 : 220 }), 40)
+    })
+    ro.observe(el)
     return () => {
       clearTimeout(t)
-      window.removeEventListener('resize', onResize)
+      ro.disconnect()
     }
-  }, [fitView])
+  }, [fitView, !!layout])
 
   // Refit whenever the layout itself changes (org.yaml edited, first load).
   useEffect(() => {
@@ -206,7 +210,7 @@ export function OrgChart() {
   if (!layout) return <div className="loading">…</div>
 
   return (
-    <>
+    <div className="chart" ref={box}>
     <FocusToggle />
     <ReactFlow<FlowNode, FlowEdge>
       nodes={layout.nodes}
@@ -224,7 +228,7 @@ export function OrgChart() {
       onNodeClick={(_, n) => (n.data.kind === 'agent' || n.data.kind === 'owner' ? select(n.id) : undefined)}
       onPaneClick={() => select(null)}
     />
-    </>
+    </div>
   )
 }
 

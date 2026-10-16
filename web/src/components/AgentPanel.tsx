@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentEvent, CompiledFile } from '../../../shared/types.ts'
 import { get, post } from '../api.ts'
 import { useT, type StringKey } from '../i18n.ts'
@@ -57,6 +57,36 @@ function Tabs<T extends string>({ tabs, value, onChange }: { tabs: [T, StringKey
   )
 }
 
+const DOCK_MIN = 340
+
+/** Drag the panel's left edge to make it wider or narrower; the width is remembered. */
+function DockHandle() {
+  const { t } = useT()
+  const start = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const max = () => Math.max(DOCK_MIN, Math.min(760, window.innerWidth * 0.6))
+    let w = 0
+    const move = (ev: PointerEvent) => {
+      w = Math.round(Math.min(max(), Math.max(DOCK_MIN, window.innerWidth - ev.clientX)))
+      document.documentElement.style.setProperty('--dock', `${w}px`)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.classList.remove('resizing')
+      try {
+        if (w) localStorage.setItem('dock', String(w))
+      } catch {
+        // storage unavailable — the width lasts for this visit only
+      }
+    }
+    document.body.classList.add('resizing')
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  return <div className="dock-handle" onPointerDown={start} title={t('resizePanel')} />
+}
+
 export function AgentPanel() {
   const { company, selected, select } = useCompanyCtx()
   const { t, l } = useT()
@@ -73,15 +103,24 @@ export function AgentPanel() {
     // Open the owner panel on approvals when something is waiting, otherwise on the profile.
     if (selected === company.org?.owner.id) setOwnerTab(company.pending.length ? 'approvals' : 'profile')
   }, [selected])
+  useEffect(() => {
+    if (!selected) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('.modal-bg') && select(null)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, select])
 
   if (!selected || !company.org) return null
   const owner = company.org.owner
   const name = (id?: string) => (id === owner.id ? l(owner.name) : l(company.agents.find((x) => x.id === id)?.name) || id || '')
   const meaningful = company.events.filter((e) => e.kind !== 'system' && e.kind !== 'chat')
   const close = (
-    <button className="close" onClick={() => select(null)} aria-label={t('close')}>
-      ×
-    </button>
+    <>
+      <DockHandle />
+      <button className="close" onClick={() => select(null)} aria-label={t('close')}>
+        ×
+      </button>
+    </>
   )
 
   if (selected === PLAN) {

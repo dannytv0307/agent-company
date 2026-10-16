@@ -34,6 +34,7 @@ const STRINGS = {
   write: { en: 'Write to workspace', ja: 'ワークスペースに書き込む' },
   written: { en: 'Written', ja: '書き込み済み' },
   close: { en: 'Close', ja: '閉じる' },
+  resizePanel: { en: 'Drag to resize', ja: 'ドラッグで幅を変更' },
   manualNote: {
     en: 'Antigravity consumer plans don’t allow automation by other apps. Copy the prompt and run it in Antigravity.',
     ja: 'Antigravity の個人プランは外部アプリからの自動実行に非対応です。プロンプトをコピーして Antigravity で実行してください。',
