@@ -81,7 +81,7 @@ export async function decide(id: string, approve: boolean): Promise<Proposal> {
     else if (p.kind === 'hire') writeAgents(org, project, [p.hire!], reserved)
     else if (p.kind === 'permission') await grantPermissions(project.id, p.permission!)
     else removeAgent(project, p.dismiss!.id)
-    await syncProjects(org) // the CEO's brief lists the new team
+    await syncProjects(await loadOrg()) // the organizer's brief lists the new team and permissions
   }
   p.status = approve ? 'approved' : 'rejected'
   save()
