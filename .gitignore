@@ -1,0 +1,13 @@
+node_modules/
+dist/
+data/
+workspace/
+.playwright-mcp/
+
+# The owner's own company (names, project folders). A fresh clone starts from templates/blank-company.yaml.
+org.yaml
+
+.env
+.env.*
+*.log
+.DS_Store
