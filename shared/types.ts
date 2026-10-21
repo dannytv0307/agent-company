@@ -88,6 +88,8 @@ export interface RepoCommand {
   name: string
   description?: string
   argumentHint?: string
+  /** The repo's agents the command's text calls on, e.g. "hand the diff to `code-reviewer`". */
+  agents?: string[]
 }
 
 export type CheckpointKind = 'spec' | 'plan' | 'milestone' | 'decision'

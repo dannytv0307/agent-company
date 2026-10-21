@@ -586,7 +586,7 @@ app.post('/api/chat/:id/retry', async (c) => {
   const agentId = c.req.param('id')
   const { projectId } = await c.req.json<{ projectId?: string }>().catch(() => ({ projectId: undefined }))
   const project = projectOf(await loadOrg(), projectId)
-  if (isReplying(agentId)) return c.json({ error: 'The agent is replying right now.' }, 409)
+  if (isReplying(agentId, project.id)) return c.json({ error: 'The agent is replying right now.' }, 409)
   const thread = chatHistory(agentId).filter((m) => m.projectId === project.id)
   const last = thread.at(-1)
   if (!last || last.role !== 'owner') return c.json({ error: 'Nothing is waiting for a reply.' }, 400)

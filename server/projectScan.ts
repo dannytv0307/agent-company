@@ -95,12 +95,17 @@ export function scanProject(dir: string): ProjectScan | undefined {
     ? readdirSync(commandsDir)
         .filter((n) => n.endsWith('.md'))
         .map((n) => {
-          const fm = frontmatter(path.join(commandsDir, n))
+          const file = path.join(commandsDir, n)
+          const fm = frontmatter(file)
           const hint = fm['argument-hint']
+          // Which of the repo's agents the command calls on: their ids named in its body.
+          const body = readFileSync(file, 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---/, '')
+          const calls = agents.filter((a) => new RegExp(`(?<![\\w-])${a.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i').test(body)).map((a) => a.id)
           return {
             name: n.replace(/\.md$/, ''),
             ...(fm.description ? { description: String(fm.description) } : {}),
             ...(hint ? { argumentHint: Array.isArray(hint) ? hint.join(' ') : String(hint) } : {}),
+            ...(calls.length ? { agents: calls } : {}),
           }
         })
     : []

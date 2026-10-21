@@ -4,7 +4,6 @@ import { api, get, post } from '../api.ts'
 import { useT, type StringKey } from '../i18n.ts'
 import { hhmm, useCompanyCtx } from '../context.ts'
 import { monogram, subtitle } from './OrgChart.tsx'
-import { Chat } from './Chat.tsx'
 import { Approvals } from './Approvals.tsx'
 import { OwnerProfile } from './OwnerProfile.tsx'
 import { AgentEditor } from './AgentEditor.tsx'
@@ -94,23 +93,27 @@ function Tabs<T extends string>({ tabs, value, onChange }: { tabs: [T, StringKey
 
 const DOCK_MIN = 340
 
-/** Drag the panel's left edge to make it wider or narrower; the width is remembered. */
-function DockHandle() {
+/**
+ * Drag a docked panel's inner edge to make it wider or narrower; the width is remembered.
+ * `right`: the side panel (its left edge). `left`: the chat (its right edge).
+ */
+export function DockHandle({ side = 'right' }: { side?: 'left' | 'right' }) {
   const { t } = useT()
+  const key = side === 'right' ? 'dock' : 'chatDock'
   const start = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault()
-    const max = () => Math.max(DOCK_MIN, Math.min(760, window.innerWidth * 0.6))
+    const max = () => Math.max(DOCK_MIN, Math.min(760, window.innerWidth * (side === 'right' ? 0.6 : 0.45)))
     let w = 0
     const move = (ev: PointerEvent) => {
-      w = Math.round(Math.min(max(), Math.max(DOCK_MIN, window.innerWidth - ev.clientX)))
-      document.documentElement.style.setProperty('--dock', `${w}px`)
+      w = Math.round(Math.min(max(), Math.max(DOCK_MIN, side === 'right' ? window.innerWidth - ev.clientX : ev.clientX)))
+      document.documentElement.style.setProperty(`--${key}`, `${w}px`)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       document.body.classList.remove('resizing')
       try {
-        if (w) localStorage.setItem('dock', String(w))
+        if (w) localStorage.setItem(key, String(w))
       } catch {
         // storage unavailable — the width lasts for this visit only
       }
@@ -119,7 +122,7 @@ function DockHandle() {
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
-  return <div className="dock-handle" onPointerDown={start} title={t('resizePanel')} />
+  return <div className={`dock-handle ${side}`} onPointerDown={start} title={t('resizePanel')} />
 }
 
 export function AgentPanel() {
@@ -127,14 +130,14 @@ export function AgentPanel() {
   const { t, l } = useT()
   const [files, setFiles] = useState<CompiledFile[]>([])
   const [copied, setCopied] = useState<string | null>(null)
-  const [tab, setTab] = useState<'chat' | 'activity' | 'profile'>('chat')
+  const [tab, setTab] = useState<'inbox' | 'activity' | 'profile'>('activity')
   const [ownerTab, setOwnerTab] = useState<'profile' | 'approvals' | 'activity'>('profile')
   const [removing, setRemoving] = useState(false)
   const cleared = useCleared()
   const [removeErr, setRemoveErr] = useState<string | null>(null)
 
   useEffect(() => {
-    setTab('chat')
+    setTab('activity')
     if (selected && ![ACTIVITY, APPROVALS, PLAN].includes(selected)) get<CompiledFile[]>(`/api/compile?project=${encodeURIComponent(company.project?.id ?? '')}`).then(setFiles).catch(() => setFiles([]))
   }, [selected])
   useEffect(() => {
@@ -332,7 +335,7 @@ export function AgentPanel() {
 
       <Tabs
         tabs={[
-          ['chat', 'chat'],
+          ...(a.manual ? [['inbox', 'inbox', inbox.length] as ['inbox', 'inbox', number]] : []),
           ['activity', 'activity'],
           ['profile', 'profile'],
         ]}
@@ -340,33 +343,30 @@ export function AgentPanel() {
         onChange={setTab}
       />
 
-      {tab === 'chat' &&
-        (a.manual ? (
-          <section className="tab-body">
-            <p className="muted small">{t('manualNote')}</p>
-            {inbox.map((m) => (
-              <div key={m.id} className="inbox-item">
-                <p>{m.task}</p>
-                <div className="row">
-                  <button className="link small" onClick={() => copy(m.id, m.prompt)}>
-                    {copied === m.id ? t('copied') : t('copyPrompt')}
-                  </button>
-                  <button className="link small" onClick={() => post(`/api/manual/${m.id}/done`).then(company.refreshManual)}>
-                    {t('markDone')}
-                  </button>
-                </div>
+      {tab === 'inbox' && (
+        <section className="tab-body">
+          <p className="muted small">{t('manualNote')}</p>
+          {inbox.map((m) => (
+            <div key={m.id} className="inbox-item">
+              <p>{m.task}</p>
+              <div className="row">
+                <button className="link small" onClick={() => copy(m.id, m.prompt)}>
+                  {copied === m.id ? t('copied') : t('copyPrompt')}
+                </button>
+                <button className="link small" onClick={() => post(`/api/manual/${m.id}/done`).then(company.refreshManual)}>
+                  {t('markDone')}
+                </button>
               </div>
-            ))}
-          </section>
-        ) : (
-          <Chat agent={a} />
-        ))}
+            </div>
+          ))}
+        </section>
+      )}
 
       {tab === 'activity' && (
         <div className="tab-body">
           <RunningWork agentId={a.id} />
           <ClearBar count={related.length} onClear={() => cleared.clear(`agent:${a.id}`)} />
-          <Timeline events={related} name={name} />
+          <Timeline events={related} name={name} full />
         </div>
       )}
 

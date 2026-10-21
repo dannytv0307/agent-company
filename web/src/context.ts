@@ -10,6 +10,15 @@ export interface Ctx {
   /** Org chart: dim everyone not involved in the selected project. */
   focus: boolean
   setFocus: (f: boolean) => void
+  /** The agent called with "@agent-id" in the chat being typed, lit up on the canvas. */
+  typingAgent: string | null
+  setTypingAgent: (id: string | null) => void
+  /** The slash command being typed in the chat, lit up on the canvas. */
+  typingCommand: string | null
+  setTypingCommand: (name: string | null) => void
+  /** Text to put into the chat box (e.g. a command or an agent clicked on the canvas); `n` makes each request new. */
+  prefill: { text: string; n: number } | null
+  fill: (text: string) => void
 }
 
 export const CompanyContext = createContext<Ctx | null>(null)

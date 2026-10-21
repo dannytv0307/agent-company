@@ -8,7 +8,7 @@ import type { AgentRef, ChatMessage, OrgDef, ProjectRef } from '../shared/types.
 import { bus, tagRun } from './events.ts'
 import { DATA_DIR, findAgentIn, loadOrg } from './org.ts'
 import { ceoPrompt, compileOrg, MCP_SERVER, writeCompiled } from './compile.ts'
-import { isBusy } from './assignments.ts'
+import { assignmentsOf } from './assignments.ts'
 import { runClaudeDirect } from './runners/claude.ts'
 import { repoContext, runCodexAgent } from './runners/codex.ts'
 import { expandCommand, parseSlash } from './commands.ts'
@@ -43,9 +43,11 @@ function recap(agentId: string, projectId: string): string {
   return `[Your earlier conversation with the owner in this project, for context. The app's tools were updated since then: rely on the tools and instructions you have now, not on what was said about them earlier.]\n${lines.join('\n\n')}\n[End of earlier conversation]`
 }
 const inbox = new Map<string, string[]>()
+// Per agent and project (`key`): each project has its own conversation with an agent, so a reply
+// being written in one project never holds up a message in another.
 const replying = new Set<string>()
-// Messages sent while the agent is still answering the previous one.
-const queued = new Map<string, { text: string; project: ProjectRef }[]>()
+// Messages sent while the agent is still answering the previous one in the same project.
+const queued = new Map<string, string[]>()
 
 function thread(agentId: string): ChatMessage[] {
   let t = threads.get(agentId)
@@ -95,7 +97,9 @@ export function openQuestions(agentIds: string[]): { agentId: string; projectId?
   }
   return out
 }
-export const isReplying = (agentId: string) => replying.has(agentId)
+/** Replying in that project, or (without one) in any project. */
+export const isReplying = (agentId: string, projectId?: string) =>
+  projectId ? replying.has(key(agentId, projectId)) : [...replying].some((k) => k.startsWith(`${agentId}@`))
 export const anyReplying = () => replying.size > 0
 
 /** Owner notes waiting for a busy agent; reading them clears the inbox. */
@@ -149,13 +153,15 @@ export async function sendToAgent(agentId: string, text: string, project: Projec
     note(`Delivered live to ${a.name.en}'s current session in ${project.name}.`)
     return
   }
-  if (isBusy(agentId) && !replying.has(agentId)) {
+  const k = key(agentId, project.id)
+  // Busy on a task in this project: they read the message at their next step there.
+  if (assignmentsOf(agentId).some((w) => w.projectId === project.id) && !replying.has(k)) {
     inbox.set(agentId, [...(inbox.get(agentId) ?? []), text])
     note(`${a.name.en} is busy on a task — the message is in their inbox and they will read it at their next step.`)
     return
   }
-  if (replying.has(agentId)) {
-    queued.set(agentId, [...(queued.get(agentId) ?? []), { text, project }])
+  if (replying.has(k)) {
+    queued.set(k, [...(queued.get(k) ?? []), text])
     note(`Queued — ${a.name.en} will read this right after finishing the current reply.`)
     return
   }
@@ -171,7 +177,8 @@ export async function continueDirect(agentId: string, text: string, project: Pro
   const org = await loadOrg()
   const a = findAgentIn(org, agentId, project)
   if (!a) throw new Error(`Unknown agent "${agentId}"`)
-  if (replying.has(agentId)) queued.set(agentId, [...(queued.get(agentId) ?? []), { text, project }])
+  const k = key(agentId, project.id)
+  if (replying.has(k)) queued.set(k, [...(queued.get(k) ?? []), text])
   else startDirect(org, a, text, project)
 }
 
@@ -182,7 +189,7 @@ function startDirect(org: OrgDef, a: AgentRef, text: string, project: ProjectRef
   tagRun(runId, project.id)
   const k = key(agentId, project.id)
   const note = (t: string) => addMessage(agentId, 'note', t, project.id)
-  replying.add(agentId)
+  replying.add(k)
   bus.emit({ runId, kind: 'activity', agent: agentId, text: 'Reading your message…', meta: { aid: runId } })
   const job = startWork({ id: runId, kind: 'chat', projectId: project.id, agentId, engine: a.runtime === 'codex' ? 'codex' : 'claude', title: text.split('\n')[0].slice(0, 120), runId, aid: runId })
   let child: ChildProcess | undefined
@@ -204,16 +211,13 @@ function startDirect(org: OrgDef, a: AgentRef, text: string, project: ProjectRef
       note(job.stopped ? `Stopped — ${a.name.en} did not finish this reply.` : `Could not reach ${a.name.en}: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       job.end()
-      replying.delete(agentId)
+      replying.delete(k)
       bus.emit({ runId, kind: 'system', agent: agentId, text: 'Chat reply finished', meta: { chatEnd: agentId, aid: runId } })
-      const next = queued.get(agentId)
+      // Follow-ups sent meanwhile in this project go together.
+      const next = queued.get(k)
       if (next?.length) {
-        queued.delete(agentId)
-        // Follow-ups for the same project go together; others wait their turn.
-        const same = next.filter((m) => m.project.id === next[0].project.id)
-        const rest = next.filter((m) => m.project.id !== next[0].project.id)
-        if (rest.length) queued.set(agentId, rest)
-        startDirect(org, a, same.map((m) => m.text).join('\n\n'), next[0].project)
+        queued.delete(k)
+        startDirect(org, a, next.join('\n\n'), project)
       }
     }
   })()
@@ -243,16 +247,14 @@ export function resetSession(agentId: string) {
  * and the resumable session, so the agent starts fresh. Other projects' conversations stay.
  */
 export function clearConversation(agentId: string, projectId: string): number {
-  if (replying.has(agentId)) throw new Error('The agent is still replying — try again in a moment.')
+  if (replying.has(key(agentId, projectId))) throw new Error('The agent is still replying — try again in a moment.')
   const t = thread(agentId)
   // Messages from before projects existed have no project; they belong to whichever is cleared.
   const keep = t.filter((m) => m.projectId && m.projectId !== projectId)
   const removed = t.length - keep.length
   threads.set(agentId, keep)
   writeFileSync(path.join(CHAT_DIR, `${agentId}.jsonl`), keep.map((m) => JSON.stringify(m) + '\n').join(''))
-  const rest = (queued.get(agentId) ?? []).filter((q) => q.project.id !== projectId)
-  if (rest.length) queued.set(agentId, rest)
-  else queued.delete(agentId)
+  queued.delete(key(agentId, projectId))
   delete sessions[key(agentId, projectId)]
   writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2))
   bus.emit({ kind: 'system', agent: agentId, projectId, text: 'Conversation cleared', meta: { chatCleared: agentId } })

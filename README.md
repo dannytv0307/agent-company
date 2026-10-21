@@ -14,11 +14,11 @@ Lần chạy đầu, nếu chưa có `org.yaml`, app tự tạo từ `templates/
 
 ## Bắt đầu
 
-1. Bấm vào thẻ **owner** để điền profile: tên, chức danh, giới thiệu bản thân, ngôn ngữ báo cáo, tên công ty và chế độ duyệt thay đổi đội.
+1. Bấm vào nút chữ cái đầu tên bạn ở góc phải header để điền profile: tên, chức danh, giới thiệu bản thân, ngôn ngữ báo cáo, tên công ty và chế độ duyệt thay đổi đội.
 2. **Manage projects…**: thêm thư mục project (repo có sẵn hoặc thư mục mới).
-3. Chọn project trên header. Sơ đồ hiện: bạn → Organizer → **đội của project đó**.
+3. Chọn project trên header. Màn hình chia hai: bên trái là **khung chat**, bên phải là **khung project** gồm các slash command (hình lục giác) và đội agent (Claude Code ở trên, Codex ở dưới). Mũi tên nối mỗi lệnh với các agent mà lệnh đó gọi tới. Agent nào đang làm việc thì có mũi tên nét đứt chạy từ Organizer (góc dưới bên trái) tới agent đó. Kết quả mới nhất mỗi agent giao xong hiện thành thẻ **Outputs** ở bên phải agent; bấm vào để xem báo cáo đầy đủ. Khi Claude Code tự tạo agent phụ (general-purpose, Explore, Plan…), agent đó hiện trong mục **Spawned by Claude** lúc đang chạy, in kết quả ra cột Outputs khi xong, rồi tự biến mất sau khoảng 45 giây.
 4. Project chưa có đội: bấm ví dụ "Build a team…" hoặc nhờ Organizer đề xuất. Organizer gọi `propose_team`, bạn duyệt trong **Approvals**, và app ghi các file agent vào `.claude/agents/` của repo.
-5. Giao việc cho Organizer, hoặc bấm vào bất kỳ agent nào để **chat trực tiếp**.
+5. Mỗi project có **một khung chat duy nhất** ở bên trái. Tin nhắn mặc định gửi cho Organizer; bắt đầu tin nhắn bằng `@id-agent` để gửi thẳng cho agent đó (bấm vào thẻ agent cũng điền sẵn `@id-agent`). Câu trả lời của mọi agent đều hiện trong cùng khung chat. Nút **i** ở góc thẻ agent mở hoạt động và profile của agent.
 
 ## Đội của từng project
 
@@ -58,7 +58,8 @@ Organizer gọi `ask_owner` ở các điểm cần chốt và **chờ** câu tr�
 
 ## Slash command của repo
 
-- Gõ `/` trong khung chat hoặc ô giao việc để thấy danh sách lệnh trong `.claude/commands/` của project (kèm mô tả và tham số); ↑/↓ để chọn, Tab hoặc Enter để điền.
+- Gõ `/` trong khung chat (hoặc bấm vào một lệnh trên khung project) để thấy danh sách lệnh trong `.claude/commands/` của project (kèm mô tả và tham số); ↑/↓ để chọn, Tab hoặc Enter để điền.
+- Khi đang gõ một lệnh, lệnh đó và các agent nó gọi sáng lên trên khung project; khi gửi, một chấm sáng chạy từ khung chat qua lệnh tới các agent. App biết lệnh gọi agent nào bằng cách tìm id của agent trong nội dung file lệnh.
 - Gửi `/ten-lenh tham-so` cho agent Claude: Claude Code tự chạy lệnh đó. Với Organizer chạy bằng Codex, app tự mở file lệnh, điền `$ARGUMENTS` / `$1…` rồi gửi thành prompt.
 - Organizer và các agent trong đội cũng tự dùng được lệnh của repo (qua Skill tool). Lệnh commit/push/deploy/xoá thì Organizer phải hỏi bạn trước (check-in Decision), trừ khi chính bạn yêu cầu.
 
@@ -72,7 +73,7 @@ Organizer gọi `ask_owner` ở các điểm cần chốt và **chờ** câu tr�
 
 ## Chọn bộ máy cho Organizer
 
-Bấm vào Organizer, mở tab **Profile**, chọn **Runs on: Claude Code / Codex**.
+Chat với Organizer, bấm **Details**, mở tab **Profile**, chọn **Runs on: Claude Code / Codex**.
 
 | | Claude Code | Codex |
 |---|---|---|
@@ -92,7 +93,7 @@ Bấm vào Organizer, mở tab **Profile**, chọn **Runs on: Claude Code / Code
 
 ## Portfolio & trang Project
 
-- **Company / Projects** trên header dùng để chuyển giữa sơ đồ và màn hình Portfolio.
+- **Project / All projects** trên header dùng để chuyển giữa khung project và màn hình Portfolio.
 - **Portfolio**: mỗi project là một thẻ gồm % tiến độ, milestone hiện tại, ai đang làm, việc tiếp theo, lần cập nhật cuối và chi phí. Project **cần bạn** luôn nằm đầu.
   - "Cần bạn" gồm: đề xuất chờ duyệt, câu hỏi agent hỏi bạn qua `message_owner` mà bạn chưa trả lời, task bị chặn.
 - **Assign to several projects**: viết yêu cầu cho từng project, bấm một lần là các project cùng chạy song song.
@@ -104,7 +105,7 @@ Bấm vào Organizer, mở tab **Profile**, chọn **Runs on: Claude Code / Code
 - App quét `CLAUDE.md`, `AGENTS.md`, `.claude/agents`, `.claude/skills`, `.claude/commands`, `.mcp.json` và lộ trình như `docs/journey.md`.
 - Organizer được báo về luật trong `CLAUDE.md`, các skill và lộ trình của repo, và bám theo lộ trình đó khi lập kế hoạch. Codex được chèn nội dung `CLAUDE.md` vào prompt, và `.mcp.json` của repo được nạp.
 
-## Chat với từng agent
+## Gọi agent bằng @
 
 | Tình huống | Điều gì xảy ra |
 |---|---|
@@ -113,7 +114,7 @@ Bấm vào Organizer, mở tab **Profile**, chọn **Runs on: Claude Code / Code
 | Agent đang rảnh | Mở phiên 1:1 riêng (`claude --agent <id>` / `codex exec`) và nối tiếp phiên cũ để nhớ ngữ cảnh |
 | Agent cần hỏi bạn | Agent gọi `message_owner`, câu hỏi hiện trong khung chat |
 
-Nút **Clear** xoá cuộc trò chuyện với agent trong project đang chọn, kể cả phiên đã lưu, để agent bắt đầu lại.
+Nút **Clear** xoá cả khung chat của project đang chọn (với Organizer và mọi agent đã được gọi), kể cả phiên đã lưu, để agent bắt đầu lại.
 
 ## Cách hoạt động
 
@@ -130,7 +131,6 @@ Assign ─► Organizer (claude -p | codex exec) ─┬─ Agent tool / delegate
 mọi bước ─► event bus (data/events.jsonl) ─► SSE ─► sơ đồ, Activity, chat
 ```
 
-- **Watch a demo**: phát một kịch bản sinh từ đội của project đang chọn, không tốn quota.
 
 ## Tuỳ chỉnh tay trong `org.yaml`
 

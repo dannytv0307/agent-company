@@ -5,65 +5,107 @@ import { useT } from '../i18n.ts'
 import { hhmm, useCompanyCtx } from '../context.ts'
 import { CheckIn } from './CheckIn.tsx'
 import { ProposalCard } from './ProposalCard.tsx'
-import { useCommandMenu } from './CommandMenu.tsx'
+import { useAgentMenu, useCommandMenu } from './CommandMenu.tsx'
 
-export function Chat({ agent }: { agent: AgentRef }) {
-  const { company } = useCompanyCtx()
+/** "@game-dev fix the HUD" → the agent called and the rest of the message. */
+function mentionOf(text: string, team: AgentRef[]): { agent?: AgentRef; rest: string } {
+  const m = text.match(/^@([\w.-]+)\s*([\s\S]*)$/)
+  const agent = m ? team.find((a) => a.id.toLowerCase() === m[1].toLowerCase()) : undefined
+  return agent ? { agent, rest: m![2] } : { rest: text }
+}
+
+/**
+ * The one conversation of the selected project. Messages go to the organizer, or straight to one
+ * of the team's agents when they start with "@agent-id"; every reply lands in this same thread.
+ */
+export function Chat({ lead, team, suggestions = [] }: { lead: AgentRef; team: AgentRef[]; suggestions?: string[] }) {
+  const { company, setTypingCommand, setTypingAgent, prefill } = useCompanyCtx()
   const { t, l } = useT()
-  // The server's copy of the thread, and when it was asked for. Only messages newer than that are
-  // taken from the event stream: older copies there may belong to a conversation that was cleared.
+  const everyone = useMemo(() => [lead, ...team], [lead, team])
+  const key = everyone.map((a) => a.id).join(',')
+  // The server's copy of each agent's thread, and when it was asked for. Only messages newer than that
+  // are taken from the event stream: older copies there may belong to a conversation that was cleared.
   const [loaded, setLoaded] = useState<{ messages: ChatMessage[]; since: number }>({ messages: [], since: Infinity })
   const [text, setText] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
-  const latest = useRef(agent.id)
+  const box = useRef<HTMLTextAreaElement>(null)
+  const latest = useRef(key)
   const pid = company.project?.id ?? ''
+  const nameOf = (id: string) => l(everyone.find((a) => a.id === id)?.name) || id
 
   const reload = () => {
-    const id = agent.id
+    const k = key
     const since = Date.now()
-    return get<{ messages: ChatMessage[] }>(`/api/chat/${id}`)
-      .then((r) => latest.current === id && setLoaded({ messages: r.messages, since })) // ignore answers for an agent we already left
+    return Promise.all(everyone.map((a) => get<{ messages: ChatMessage[] }>(`/api/chat/${a.id}`).then((r) => r.messages.map((m) => ({ ...m, agentId: m.agentId ?? a.id })))))
+      .then((all) => latest.current === k && setLoaded({ messages: all.flat(), since })) // ignore answers for a team we already left
       .catch((e) => setErr(String(e.message ?? e)))
   }
 
   useEffect(() => {
-    latest.current = agent.id
+    latest.current = key
     setLoaded({ messages: [], since: Infinity })
     setErr(null)
     void reload()
-  }, [agent.id])
+  }, [key])
 
   // Cleared in another window: start over from the server's copy.
-  const lastClear = company.events.findLast((e) => e.meta?.chatCleared === agent.id)
+  const lastClear = company.events.findLast((e) => typeof e.meta?.chatCleared === 'string' && everyone.some((a) => a.id === e.meta!.chatCleared))
   useEffect(() => {
     if (lastClear) void reload()
   }, [lastClear?.id])
 
-  // The conversation in the selected project only: each project has its own session with the agent,
-  // so a clear empties exactly what is on screen.
+  // Everyone's messages in the selected project only: each project has its own session with each agent.
   const messages = useMemo(() => {
+    const ids = new Set(everyone.map((a) => a.id))
     const live = company.events
-      .filter((e) => e.kind === 'chat' && e.agent === agent.id && e.meta?.message)
-      .map((e) => e.meta!.message as ChatMessage)
+      .filter((e) => e.kind === 'chat' && e.agent && ids.has(e.agent) && e.meta?.message)
+      .map((e) => ({ ...(e.meta!.message as ChatMessage), agentId: (e.meta!.message as ChatMessage).agentId ?? e.agent! }))
       .filter((m) => m.ts >= loaded.since)
     const byId = new Map<string, ChatMessage>()
     for (const m of [...loaded.messages, ...live]) if (!m.projectId || m.projectId === pid) byId.set(m.id, m)
     return [...byId.values()].sort((a, b) => a.ts - b.ts)
-  }, [loaded, company.events, agent.id, pid])
+  }, [loaded, company.events, everyone, pid])
 
-  const multi = company.projects.length > 1
-  // Claude agents run the repo's slash commands themselves; Codex gets them expanded by the app.
-  const commands = useCommandMenu(text, setText, company.project?.scan?.commands ?? [])
-  const pending = messages.length > 0 && messages[messages.length - 1].role === 'owner'
-  const st = company.states[agent.id]
-  // The server has nothing running for this agent here, yet no reply came: it was lost (e.g. a restart).
-  const working = company.work.some((w) => w.agentId === agent.id && w.projectId === pid)
-  const stalled = pending && !working && company.connected && company.now - messages[messages.length - 1].ts > 20_000
-  const retry = async () => {
+  const repoCommands = company.project?.scan?.commands ?? []
+  const commands = useCommandMenu(text, setText, repoCommands)
+  const mentions = useAgentMenu(text, setText, team)
+  const { agent: called, rest } = mentionOf(text, team)
+  // "/name …" with one of the repo's commands, and "@agent": light them up on the canvas while typing.
+  const command = repoCommands.find((c) => c.name === rest.match(/^\/([\w:.-]+)/)?.[1])
+  useEffect(() => {
+    setTypingCommand(command?.name ?? null)
+  }, [command?.name])
+  useEffect(() => {
+    setTypingAgent(called?.id ?? null)
+  }, [called?.id])
+  useEffect(
+    () => () => {
+      setTypingCommand(null)
+      setTypingAgent(null)
+    },
+    [],
+  )
+
+  // "@agent " from an agent card on the canvas, or a command: put it in the box, ready for the rest.
+  useEffect(() => {
+    if (!prefill) return
+    setText(prefill.text)
+    box.current?.focus()
+  }, [prefill])
+
+  // Who still owes a reply: their last message in the thread is the owner's. A note after it (delivered
+  // live, put in the inbox, queued) means the answer comes another way.
+  const lastByAgent = new Map<string, ChatMessage>()
+  for (const m of messages) lastByAgent.set(m.agentId, m)
+  const waitingOn = [...lastByAgent.values()].filter((m) => m.role === 'owner')
+  // The server has nothing running for that agent here, yet no reply came: it was lost (e.g. a restart).
+  const stalled = (m: ChatMessage) =>
+    !company.work.some((w) => w.agentId === m.agentId && w.projectId === pid) && company.connected && company.now - m.ts > 20_000
+  const retry = async (agentId: string) => {
     setErr(null)
     try {
-      await post(`/api/chat/${agent.id}/retry`, { projectId: company.project?.id })
+      await post(`/api/chat/${agentId}/retry`, { projectId: company.project?.id })
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
@@ -71,16 +113,18 @@ export function Chat({ agent }: { agent: AgentRef }) {
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' })
-  }, [messages.length, pending])
+  }, [messages.length, waitingOn.length])
 
   const clear = async () => {
+    const talked = everyone.filter((a) => messages.some((m) => m.agentId === a.id))
     const where = company.projects.length > 1 ? ` (${company.project?.name})` : ''
-    if (!confirm(`${t('clearConfirm').replace('{name}', l(agent.name))}${where}`)) return
+    if (!confirm(`${t('clearConfirm').replace('{name}', talked.map((a) => l(a.name)).join(', '))}${where}`)) return
     setErr(null)
     try {
-      const r = await api<{ clearedAt: number }>('DELETE', `/api/chat/${agent.id}?project=${encodeURIComponent(pid ?? '')}`)
+      let clearedAt = Date.now()
+      for (const a of talked) clearedAt = (await api<{ clearedAt: number }>('DELETE', `/api/chat/${a.id}?project=${encodeURIComponent(pid)}`)).clearedAt
       // Drop this project's messages right away; the reload confirms what the server kept.
-      setLoaded((l) => ({ messages: l.messages.filter((m) => m.projectId && m.projectId !== pid), since: r.clearedAt }))
+      setLoaded((x) => ({ messages: x.messages.filter((m) => m.projectId && m.projectId !== pid), since: clearedAt }))
       await reload()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -88,15 +132,21 @@ export function Chat({ agent }: { agent: AgentRef }) {
   }
 
   const send = async () => {
-    const body = text.trim()
+    const to = called ?? lead
+    const body = (called ? rest : text).trim()
     if (!body) return
     setText('')
     setErr(null)
+    // Show the message going in: to the agent called, and through the command to the agents it calls.
+    const route: string[][] = []
+    if (command) route.push([`entry->cmd:${command.name}`], (command.agents ?? []).map((id) => `cmd:${command.name}->${id}`))
+    else if (called) route.push([`entry->${called.id}`])
+    if (route.length) company.pulseRoute(route, 'var(--accent)')
     try {
-      await post(`/api/chat/${agent.id}`, { text: body, projectId: company.project?.id })
+      await post(`/api/chat/${to.id}`, { text: body, projectId: company.project?.id })
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
-      setText(body)
+      setText(called ? `@${called.id} ${body}` : body)
     }
   }
 
@@ -104,75 +154,97 @@ export function Chat({ agent }: { agent: AgentRef }) {
     <div className="chat">
       {messages.length > 0 && (
         <div className="chat-tools">
-          <button className="link small danger" disabled={pending} onClick={clear} title={pending ? t('typing') : undefined}>
+          <button className="link small danger" disabled={waitingOn.length > 0} onClick={clear} title={waitingOn.length ? t('typing') : undefined}>
             {t('clearChat')}
           </button>
         </div>
       )}
       <div className="chat-log">
-        {messages.length === 0 && <p className="muted small chat-empty">{t('chatEmpty')}</p>}
+        {messages.length === 0 && (
+          <div className="chat-empty">
+            <p className="muted small">{t('chatEmpty')}</p>
+            {suggestions.length > 0 && (
+              <div className="examples">
+                {suggestions.map((s) => (
+                  <button key={s} className="example" onClick={() => setText(s)}>
+                    {s.replace(/^[^:：]+[:：]\s*/, '')}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {messages.map((m) => {
           const cp = m.checkpointId ? company.checkpoints.find((c) => c.id === m.checkpointId) : undefined
           if (cp) return <CheckIn key={m.id} cp={cp} inChat />
           const proposal = m.proposalId ? company.proposals.find((p) => p.id === m.proposalId) : undefined
           if (proposal) return <ProposalCard key={m.id} p={proposal} inChat />
+          const direct = m.agentId !== lead.id
           return m.role === 'note' ? (
             <div key={m.id} className="note-line">
+              {direct && <b>{nameOf(m.agentId)} · </b>}
               {m.text}
             </div>
           ) : (
-            <div key={m.id} className={`bubble-row ${m.role}`}>
+            <div key={m.id} className={`bubble-row ${m.role}${direct ? ' direct' : ''}`}>
               <div className="msg">
+                {m.role === 'owner' && direct && <span className="to-tag">@{m.agentId}</span>}
                 <p>{m.text}</p>
                 <span className="t">
-                  {m.role === 'owner' ? t('you') : l(agent.name)} · {hhmm(m.ts)}
+                  {m.role === 'owner' ? t('you') : nameOf(m.agentId)} · {hhmm(m.ts)}
                 </span>
               </div>
             </div>
           )
         })}
-        {stalled && (
-          <div className="note-line stalled">
-            {t('noReply')}{' '}
-            <button className="link small" onClick={retry}>
-              {t('retry')}
-            </button>
-          </div>
-        )}
-        {pending && !stalled && (
-          <div className="typing">
-            <span className="dots">
-              <i />
-              <i />
-              <i />
-            </span>
-            {l(agent.name)} {t('typing')}
-            {st?.status === 'working' && st.bubble && <em>{st.bubble.replace(/^[^\p{L}\p{N}$]+/u, '')}</em>}
-          </div>
+        {waitingOn.map((m) =>
+          stalled(m) ? (
+            <div key={m.agentId} className="note-line stalled">
+              {m.agentId !== lead.id && <b>{nameOf(m.agentId)} · </b>}
+              {t('noReply')}{' '}
+              <button className="link small" onClick={() => retry(m.agentId)}>
+                {t('retry')}
+              </button>
+            </div>
+          ) : (
+            <div key={m.agentId} className="typing">
+              <span className="dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              {nameOf(m.agentId)} {t('typing')}
+              {company.states[m.agentId]?.status === 'working' && company.states[m.agentId]?.bubble && (
+                <em>{company.states[m.agentId].bubble!.replace(/^[^\p{L}\p{N}$]+/u, '')}</em>
+              )}
+            </div>
+          ),
         )}
         <div ref={bottom} />
       </div>
       {err && <div className="error">{err}</div>}
       <div className="chat-input">
         {commands.menu}
+        {mentions.menu}
         <textarea
+          ref={box}
           rows={1}
           value={text}
-          placeholder={multi ? `${t('messageTo')} ${l(agent.name)} · ${company.project?.name}…` : `${t('messageTo')} ${l(agent.name)}…`}
-          disabled={agent.manual}
+          placeholder={`${t('messageTo')} ${l(called?.name ?? lead.name)}…`}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (commands.onKeyDown(e)) return
+            if (commands.onKeyDown(e) || mentions.onKeyDown(e)) return
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               void send()
             }
           }}
         />
-        <button className="btn solid" disabled={!text.trim() || agent.manual} onClick={send}>
+        <button className="btn solid" disabled={!(called ? rest : text).trim()} onClick={send}>
           {t('send')}
         </button>
       </div>
+      {(repoCommands.length > 0 || team.length > 0) && <div className="chat-keys">{t('chatKeys')}</div>}
     </div>
   )
 }

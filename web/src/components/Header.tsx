@@ -2,6 +2,7 @@ import type { Lang } from '../../../shared/types.ts'
 import { useT } from '../i18n.ts'
 import { useCompanyCtx } from '../context.ts'
 import { ProjectSwitcher } from './ProjectSwitcher.tsx'
+import { monogram } from './OrgChart.tsx'
 
 export type Theme = 'system' | 'light' | 'dark'
 
@@ -17,11 +18,12 @@ interface Props {
   onApprovals: () => void
   onPlan: () => void
   onConfigs: () => void
+  onOwner: () => void
   view: 'org' | 'portfolio' | 'project'
   setView: (v: 'org' | 'portfolio' | 'project') => void
 }
 
-export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals, onPlan, onConfigs, view, setView }: Props) {
+export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals, onPlan, onConfigs, onOwner, view, setView }: Props) {
   const { company } = useCompanyCtx()
   const { t, l } = useT()
   const working = Object.values(company.states).filter((s) => s.status === 'working').length
@@ -52,10 +54,10 @@ export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals
       <nav className="actions">
         <div className="views" role="tablist">
           <button role="tab" aria-selected={view === 'org'} className={view === 'org' ? 'on' : ''} onClick={() => setView('org')}>
-            {t('viewCompany')}
+            {t('viewBoard')}
           </button>
           <button role="tab" aria-selected={view !== 'org'} className={view !== 'org' ? 'on' : ''} onClick={() => setView('portfolio')}>
-            {t('projects')}
+            {t('viewAll')}
           </button>
         </div>
         <span className="sep" />
@@ -78,6 +80,11 @@ export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals
         <button className="icon text" onClick={() => setLang(lang === 'en' ? 'ja' : 'en')} aria-label="Language">
           {lang === 'en' ? '日本語' : 'EN'}
         </button>
+        {company.org && (
+          <button className="icon owner-btn" onClick={onOwner} title={`${l(company.org.owner.name)} · ${t('owner')}`} aria-label={t('owner')}>
+            {monogram(l(company.org.owner.name))}
+          </button>
+        )}
       </nav>
     </header>
   )

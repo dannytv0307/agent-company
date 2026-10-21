@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentDef, AgentEvent, AgentRef, Checkpoint, ManualTask, OrgDef, Plan, ProjectRef, Proposal, RuntimeStatus, WorkItem } from '../../shared/types.ts'
+import type { AgentEvent, AgentRef, Checkpoint, ManualTask, OrgDef, Plan, ProjectChanges, ProjectRef, Proposal, RuntimeStatus, WorkItem } from '../../shared/types.ts'
 import { get } from './api.ts'
-import { buildLayout, findPath, REPO_DIVISION, type Layout } from './layout.ts'
+import { buildLayout, outNode, spawnedNode, type Layout } from './layout.ts'
 
 export type Status = 'idle' | 'working' | 'done' | 'waiting' | 'error' | 'offline'
 
@@ -25,6 +25,22 @@ export interface AgentState {
   active: ActiveWork[]
 }
 
+/** A helper Claude Code spawned for itself (general-purpose, Explore, Plan…), not one of the team. */
+export interface Spawned {
+  /** The Agent call's id; its events carry it as their assignment id. */
+  aid: string
+  runId?: string
+  type: string
+  title: string
+  by?: string
+  startedAt: number
+  status: 'running' | 'done' | 'error' | 'stopped'
+  /** What it is doing now. */
+  activity?: string
+  output?: string
+  endedAt?: number
+}
+
 export interface Pulse {
   id: string
   edgeId: string
@@ -35,14 +51,9 @@ export interface Pulse {
 }
 
 const STEP_MS = 650
+/** How long a spawned helper stays on the canvas after it finished, its output showing. */
+const SPAWNED_LINGER_MS = 45_000
 const STALE_MS = 10 * 60_000
-const PULSE_COLORS: Partial<Record<AgentEvent['kind'], string>> = {
-  task: 'var(--warn)',
-  dispatch: 'var(--accent)',
-  report: 'var(--ok)',
-  manual: 'var(--warn)',
-  error: 'var(--bad)',
-}
 
 // The selected project is per browser: two windows can look at different projects.
 function loadSelected(): string {
@@ -152,39 +163,6 @@ export function deriveStates(events: AgentEvent[], agents: AgentRef[], manual: M
   return st
 }
 
-/** The org as drawn: owner → CEO → the selected project's team (its repo agents), in a frame of its own. */
-function chartOrg(org: OrgDef, project: ProjectRef | undefined, team: AgentRef[]): OrgDef {
-  if (!project) return org
-  const frame: OrgDef['divisions'][number] = {
-    id: REPO_DIVISION,
-    runtime: 'claude',
-    // The heading lives on the frame's label row (a node the organizer's edge can reach), not the frame.
-    label: { en: '', ja: '' },
-    color: '#94a3b8',
-    departments: [
-      {
-        id: 'team',
-        name: team.length
-          ? { en: `${project.name} · team of ${team.length}`, ja: `${project.name}・${team.length}名のチーム` }
-          : { en: `${project.name} · no agents yet — ask the organizer to propose a team`, ja: `${project.name}・エージェントはまだいません — オーガナイザーにチームの提案を依頼してください` },
-        icon: '',
-        members: [],
-      },
-      // One section per engine, so it is clear who runs on Claude Code and who on Codex.
-      ...(['claude', 'codex'] as const)
-        .map((rt) => ({ rt, members: team.filter((a) => (a.runtime === 'codex' ? 'codex' : 'claude') === rt) }))
-        .filter((s) => s.members.length)
-        .map(({ rt, members }) => ({
-          id: rt,
-          name: rt === 'codex' ? { en: `Codex · ${members.length}`, ja: `Codex・${members.length}` } : { en: `Claude Code · ${members.length}`, ja: `Claude Code・${members.length}` },
-          icon: '',
-          members: members as AgentDef[],
-        })),
-    ],
-  }
-  return { ...org, divisions: [...org.divisions, frame] }
-}
-
 export function useCompany() {
   const [org, setOrg] = useState<OrgDef | null>(null)
   const [companyAgents, setCompanyAgents] = useState<AgentRef[]>([])
@@ -212,9 +190,57 @@ export function useCompany() {
     const seen = new Set<string>()
     return [...companyAgents, ...Object.values(projectAgents).flat()].filter((a) => !seen.has(a.id) && seen.add(a.id))
   }, [companyAgents, projectAgents])
-  const view = useMemo(() => (org ? chartOrg(org, project, repoTeam) : null), [org, project, repoTeam])
+  // Each team agent's latest delivery in the selected project, shown to the right of the agent.
+  const outputs = useMemo(() => {
+    const out = new Map<string, AgentEvent>()
+    if (!project) return out
+    const team = new Set(repoTeam.map((a) => a.id))
+    for (const e of events) if (e.kind === 'report' && e.from && team.has(e.from) && e.projectId === project.id) out.set(e.from, e)
+    return out
+  }, [events, project?.id, repoTeam])
+  const delivered = [...outputs.keys()].sort().join(',')
 
-  const layout: Layout | null = useMemo(() => (view ? buildLayout(view) : null), [view])
+  // Helpers spawned in the selected project: shown while they run, then with their output for a
+  // little while, then gone.
+  const spawned = useMemo(() => {
+    const all = new Map<string, Spawned>()
+    if (!project) return all
+    for (const e of events) {
+      const aid = typeof e.meta?.aid === 'string' ? e.meta.aid : undefined
+      if (e.kind === 'dispatch' && typeof e.meta?.subagentType === 'string' && aid && e.projectId === project.id) {
+        all.set(aid, { aid, runId: e.runId, type: e.meta.subagentType, title: e.text, by: e.from, startedAt: e.ts, status: 'running' })
+        continue
+      }
+      const s = aid ? all.get(aid) : undefined
+      if (s && s.status === 'running') {
+        if (e.kind === 'activity') s.activity = e.text
+        else if (e.kind === 'report' || e.kind === 'error') {
+          s.status = e.kind === 'report' ? 'done' : 'error'
+          s.output = typeof e.meta?.full === 'string' ? e.meta.full : e.text
+          s.endedAt = e.ts
+        }
+      }
+      if (e.kind === 'system' && e.meta?.end) {
+        const ended = (e.meta.runIds as string[] | undefined) ?? (e.runId ? [e.runId] : null)
+        for (const x of all.values()) if (x.status === 'running' && (!ended || ended.includes(x.runId ?? ''))) Object.assign(x, { status: 'stopped', endedAt: e.ts })
+      }
+    }
+    for (const [aid, s] of all) {
+      const gone = s.endedAt ? now - s.endedAt > SPAWNED_LINGER_MS : now - s.startedAt > STALE_MS
+      if (gone) all.delete(aid)
+    }
+    return all
+  }, [events, project?.id, now])
+  const spawnedIds = [...spawned.keys()].join(',')
+  const finished = [...spawned.values()].filter((s) => s.output).map((s) => s.aid).join(',')
+
+  const layout: Layout | null = useMemo(
+    () =>
+      project
+        ? buildLayout(project.name, project.scan?.commands ?? [], repoTeam, delivered ? delivered.split(',') : [], spawnedIds ? spawnedIds.split(',') : [], finished ? finished.split(',') : [])
+        : null,
+    [project, repoTeam, delivered, spawnedIds, finished],
+  )
   const layoutRef = useRef(layout)
   layoutRef.current = layout
 
@@ -261,17 +287,53 @@ export function useCompany() {
     refreshPlan()
   }, [project?.id, refreshPlan])
 
-  const animate = useCallback((e: AgentEvent) => {
-    const lay = layoutRef.current
-    const color = PULSE_COLORS[e.kind]
-    if (!lay || !color || !e.from || !e.to) return
-    const path = findPath(lay, e.from, e.to)
-    if (!path?.length) return
-    const batch = path.map((p, i) => ({ id: `${e.id}:${i}`, edgeId: p.edgeId, forward: p.forward, delay: i * STEP_MS, dur: STEP_MS, color }))
+  // The selected project's git state: branch, uncommitted files, latest commit. Refreshed every 30 s,
+  // and a few seconds after an agent writes a file or reports (a burst of edits asks once).
+  const [git, setGit] = useState<ProjectChanges | null>(null)
+  const gitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const refreshGit = useCallback(() => {
+    const id = projectIdRef.current
+    if (!id) return
+    get<ProjectChanges>(`/api/projects/${encodeURIComponent(id)}/changes`)
+      .then((r) => projectIdRef.current === id && setGit(r))
+      .catch(() => {})
+  }, [])
+  const refreshGitSoon = useCallback(() => {
+    clearTimeout(gitTimer.current)
+    gitTimer.current = setTimeout(refreshGit, 3000)
+  }, [refreshGit])
+  useEffect(() => {
+    setGit(null)
+    refreshGit()
+    const t = setInterval(refreshGit, 30_000)
+    return () => clearInterval(t)
+  }, [project?.id, refreshGit])
+
+  /** Run a dot along these edges, one group after another (a group's edges at the same time). */
+  const pulseRoute = useCallback((steps: string[][], color: string) => {
+    const stamp = `${Date.now()}-${Math.random()}`
+    const batch = steps.flatMap((group, i) => group.map((edgeId) => ({ id: `${stamp}:${edgeId}`, edgeId, forward: true, delay: i * STEP_MS, dur: STEP_MS, color })))
+    if (!batch.length) return
     setPulses((ps) => [...ps, ...batch])
     const ids = new Set(batch.map((b) => b.id))
-    setTimeout(() => setPulses((ps) => ps.filter((p) => !ids.has(p.id))), batch.length * STEP_MS + 1600)
+    setTimeout(() => setPulses((ps) => ps.filter((p) => !ids.has(p.id))), steps.length * STEP_MS + 1600)
   }, [])
+
+  // Hand-offs to an agent run in from the organizer's lane; deliveries run out to the agent's output.
+  const animate = useCallback(
+    (e: AgentEvent) => {
+      const has = (id: string) => !!layoutRef.current?.edges.some((x) => x.id === id)
+      if ((e.kind === 'task' || e.kind === 'dispatch') && e.to && has(`entry->${e.to}`)) pulseRoute([[`entry->${e.to}`]], 'var(--accent)')
+      // A spawned helper's card (and its output) appear with the event itself: run the dot once laid out.
+      const aid = typeof e.meta?.aid === 'string' ? e.meta.aid : ''
+      if (e.kind === 'dispatch' && e.meta?.subagentType) setTimeout(() => pulseRoute([[`entry->${spawnedNode(aid)}`]], 'var(--accent)'), 120)
+      if (e.kind === 'report' && aid && layoutRef.current?.nodes.some((n) => n.id === spawnedNode(aid)))
+        setTimeout(() => pulseRoute([[`${spawnedNode(aid)}->${outNode(spawnedNode(aid))}`]], 'var(--ok)'), 120)
+      // The output node appears with this very event, so its edge may not be laid out yet.
+      if (e.kind === 'report' && e.from && layoutRef.current?.nodes.some((n) => n.id === e.from)) setTimeout(() => pulseRoute([[`${e.from}->out:${e.from}`]], 'var(--ok)'), 120)
+    },
+    [pulseRoute],
+  )
 
   useEffect(() => {
     void refreshOrg()
@@ -322,6 +384,7 @@ export function useCompany() {
           setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev.slice(-2999), e]))
           setNow(Date.now())
           animate(e)
+          if ((e.meta?.file || e.kind === 'report') && e.projectId === projectIdRef.current) refreshGitSoon()
           if (e.kind === 'manual' || e.meta?.manualId) void refreshManual()
           if (e.kind === 'task' || e.kind === 'system') void refreshState()
           if (e.meta?.proposalId) void refreshProposals()
@@ -349,7 +412,7 @@ export function useCompany() {
       es?.close()
       clearInterval(tick)
     }
-  }, [animate, refreshCheckpoints, refreshManual, refreshOrg, refreshPlan, refreshProposals, refreshState, refreshWork])
+  }, [animate, refreshGitSoon, refreshCheckpoints, refreshManual, refreshOrg, refreshPlan, refreshProposals, refreshState, refreshWork])
 
   const states = useMemo(() => deriveStates(events, agents, manual, runtimes, now), [events, agents, manual, runtimes, now])
 
@@ -384,7 +447,7 @@ export function useCompany() {
   }, [])
 
   return {
-    org, view, agents, runtimes, events, manual, proposals, pending, checkpoints, openCheckIns, attention, work, running, pulses, states, layout, connected, error, now,
+    org, agents, runtimes, events, manual, proposals, pending, checkpoints, openCheckIns, attention, work, running, pulses, states, layout, connected, error, now, pulseRoute, outputs, git, spawned,
     projects, project, repoTeam, busyProjects, selectProject, plan, progress, involved,
     refreshManual, refreshState, refreshOrg, refreshProposals, refreshCheckpoints, refreshWork, refreshPlan,
   }

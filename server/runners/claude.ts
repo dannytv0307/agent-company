@@ -150,7 +150,10 @@ function startClaude(org: OrgDef, first: string, o: StartOpts) {
             const to = subagents.has(target) ? target : actor
             const tid = taskIdIn(b.input?.description) ?? taskIdIn(b.input?.prompt)
             owners.set(b.id, { agent: to, taskId: tid })
-            bus.emit({ runId, kind: 'dispatch', from: actor, to, text: short(b.input?.description ?? b.input?.prompt, 80), meta: { prompt: b.input?.prompt, aid: b.id, taskId: tid } })
+            // Not one of the team: a helper Claude Code spawns for itself (general-purpose, Explore, Plan…).
+            // Its work stays attributed to the caller; the type lets the app show it while it runs.
+            const spawned = to === actor ? { subagentType: target || 'general-purpose' } : {}
+            bus.emit({ runId, kind: 'dispatch', from: actor, to, text: short(b.input?.description ?? b.input?.prompt, 80), meta: { prompt: b.input?.prompt, aid: b.id, taskId: tid, ...spawned } })
           } else if (b.name === 'ToolSearch' || /^mcp__agent-company__(delegate|check_messages|get_plan)$/.test(b.name)) {
             // delegate: the endpoint emits dispatch/report itself. The rest is internal noise.
           } else {

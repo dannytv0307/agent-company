@@ -1,261 +1,157 @@
-// Computes absolute positions for the org chart and the structural edges between nodes.
+// Computes absolute positions for the project canvas: the repo's slash commands on the left, its
+// agents in the middle (Claude Code above Codex), their latest delivered output on the right, and the
+// edges between them. The organizer (the chat on the left) comes in along a lane at the bottom.
 import type { Edge, Node } from '@xyflow/react'
-import type { OrgDef } from '../../shared/types.ts'
+import type { AgentRef, RepoCommand } from '../../shared/types.ts'
 
-export const CARD_W = 188
-export const CEO_W = 200
+export const CARD_W = 228
 export const CARD_H = 62
-const INDENT = 22
-const COL_W = CARD_W + INDENT
-const COL_GAP = 16
-const ROW_GAP = 16
-const PAD = 22
-const HEAD = 52
-const DEPT_H = 28
-const LABEL_H = 26
-const DIV_GAP = 56
-const TOP = 120
-const SIDE_GAP = 24
-const REPO_GAP = 48
+export const CMD_W = 210
+export const CMD_H = 58
+const GAP = 16
+const PAD = 36
+const HEAD = 108
+const LABEL_H = 34
+/** Between the command column and the agent column: room for the edges to turn. */
+const MID = 210
+const SECTION_GAP = 30
+/** Left of the commands: where the chat comes in. */
+const ENTRY_W = 28
+const NOTE_H = 72
+/** Under everything: the lane the organizer's arrows run along to the agents at work. */
+const LANE_H = 52
+/** The organizer's arrows turn up this far left of the agent column. */
+const LANE_IN = 30
+const OUT_GAP = 64
+export const OUT_W = 270
+
+export type Engine = 'claude' | 'codex'
+export type Section = 'commands' | Engine | 'outputs' | 'spawned'
 
 export type NodeData =
-  | { kind: 'owner' }
+  | { kind: 'frame'; title: string; width: number; height: number }
+  | { kind: 'label'; section: Section; count: number }
+  | { kind: 'command'; command: RepoCommand }
   | { kind: 'agent'; agentId: string }
-  | { kind: 'dept'; divisionId: string; deptId: string; compact: boolean }
-  | { kind: 'division'; divisionId: string; width: number; height: number }
+  /** An output: a team agent's latest delivery (by agent id), or a spawned helper's (by `aid`). */
+  | { kind: 'result'; agentId: string; aid?: string }
+  | { kind: 'spawned'; aid: string }
+  | { kind: 'entry' }
+  | { kind: 'note'; note: 'noCommands' | 'noAgents' }
 
-export type EdgeVariant = 'tree' | 'cross' | 'manual'
+/** entry: chat → command. link: command → agent. lead: organizer → agent at work. output: agent → its output. */
+export type EdgeVariant = 'entry' | 'link' | 'lead' | 'output'
 export type EdgeData = {
   variant: EdgeVariant
-  centerX?: number
-  /** Turn horizontally at this y (keeps edges to a second row of cards in the gap above it). */
-  centerY?: number
-  /** Route along a vertical gutter at this x (left of the source), instead of a smooth-step. */
-  gutter?: number
+  hot?: boolean
+  /** Work is going along this arrow right now: it stays lit and flows until the work ends. */
+  live?: boolean
+  /** Run right along the source's row, up (or down) at this x, then right into the target. */
+  lane?: number
 }
 
-/** The selected project's own agents get their own frame under the main division. */
-export const REPO_DIVISION = 'repo'
+/** Where messages from the chat enter the canvas. */
+export const ENTRY = 'entry'
+export const cmdNode = (name: string) => `cmd:${name}`
+export const outNode = (agentId: string) => `out:${agentId}`
+export const spawnedNode = (aid: string) => `spawned:${aid}`
 
 export interface Layout {
   nodes: Node<NodeData>[]
   edges: Edge<EdgeData>[]
-  adjacency: Map<string, { edgeId: string; other: string; forward: boolean }[]>
-}
-
-export function buildLayout(org: OrgDef): Layout {
-  const nodes: Node<NodeData>[] = []
-  const edges: Edge<EdgeData>[] = []
-  const place = (id: string, x: number, y: number, data: NodeData, extra: Partial<Node<NodeData>> = {}) =>
-    nodes.push({ id, position: { x, y }, data, type: data.kind, draggable: false, ...extra })
-  let gutterX: number | undefined
-  const edge = (source: string, target: string, sourceHandle: string, targetHandle: string, variant: EdgeVariant = 'tree', gutter?: number) =>
-    edges.push({
-      id: `${source}->${target}`, source, target, sourceHandle, targetHandle, type: 'pulse',
-      // Cross-division edges run down the gap between divisions instead of through them.
-      data: { variant, centerX: variant === 'tree' ? undefined : gutterX, gutter },
-    })
-
-  const [main, ...rest] = org.divisions
-  const repo = rest.find((d) => d.id === REPO_DIVISION)
-  // Divisions with nobody in them (e.g. Antigravity before any hire) stay off the chart.
-  const side = rest.filter((d) => d.id !== REPO_DIVISION && (d.ceo || d.departments.some((dep) => dep.members.length)))
-  const mainCeo = main?.ceo?.id
-
-  if (main?.ceo && !main.departments.length && !side.length) {
-    leadLayout(org, main.ceo.id, repo, place, edges)
-    return withAdjacency(nodes, edges)
-  }
-
-  // ── main division: departments as columns ──────────────────
-  let mainW = 0
-  let mainBottom = TOP
-  if (main) {
-    const n = Math.max(1, main.departments.length)
-    mainW = Math.max(PAD * 2 + n * COL_W + (n - 1) * COL_GAP, CEO_W + PAD * 2 + 120)
-    const ceoY = TOP + HEAD + 8
-    const deptY = ceoY + CARD_H + 56
-    const memberY = deptY + DEPT_H + 20
-    const maxMembers = Math.max(1, ...main.departments.map((d) => d.members.length))
-    const height = memberY - TOP + maxMembers * (CARD_H + ROW_GAP) + PAD
-    mainBottom = TOP + height
-    place(`div:${main.id}`, 0, TOP, { kind: 'division', divisionId: main.id, width: mainW, height }, { selectable: false, zIndex: -1 })
-    if (main.ceo) place(main.ceo.id, mainW / 2 - CEO_W / 2, ceoY, { kind: 'agent', agentId: main.ceo.id })
-    main.departments.forEach((dep, i) => {
-      const x = (mainW - (n * COL_W + (n - 1) * COL_GAP)) / 2 + i * (COL_W + COL_GAP)
-      const deptId = `dept:${main.id}:${dep.id}`
-      place(deptId, x, deptY, { kind: 'dept', divisionId: main.id, deptId: dep.id, compact: false }, { selectable: false })
-      if (main.ceo) edge(main.ceo.id, deptId, 'bottom', 'top')
-      dep.members.forEach((m, j) => {
-        place(m.id, x + INDENT, memberY + j * (CARD_H + ROW_GAP), { kind: 'agent', agentId: m.id })
-        edge(deptId, m.id, 'bottom', 'left')
-      })
-    })
-  }
-
-  // ── the project's own agents: a frame of their own under the main division, in one row.
-  // The CEO reaches it down the left gutter; company members reach it through `delegate`.
-  if (main && repo) {
-    const members = repo.departments.flatMap((d) => d.members)
-    const head = repo.departments[0]
-    if (head && members.length) {
-      const rowW = members.length * CARD_W + (members.length - 1) * COL_GAP
-      const w = Math.max(mainW, rowW + PAD * 2)
-      const x0 = (mainW - w) / 2
-      const top = mainBottom + REPO_GAP
-      const headerY = top + HEAD + 4
-      const rowY = headerY + DEPT_H + 34
-      const headId = `dept:${repo.id}:${head.id}`
-      place(`div:${repo.id}`, x0, top, { kind: 'division', divisionId: repo.id, width: w, height: rowY - top + CARD_H + PAD }, { selectable: false, zIndex: -1 })
-      place(headId, x0 + PAD, headerY, { kind: 'dept', divisionId: repo.id, deptId: head.id, compact: false }, { selectable: false })
-      if (mainCeo) edge(mainCeo, headId, 'left-src', 'left', 'tree', Math.min(0, x0) - DIV_GAP / 2)
-      members.forEach((m, i) => {
-        place(m.id, x0 + (w - rowW) / 2 + i * (CARD_W + COL_GAP), rowY, { kind: 'agent', agentId: m.id })
-        edge(headId, m.id, 'bottom', 'top')
-      })
-    }
-  }
-
-  // ── side divisions: right-hand column. Divisions with a CEO stack downward from the
-  // main division's top; CEO-less (manual) studios sit above them, beside the owner,
-  // which keeps the chart short so it renders larger.
-  const sideX = mainW + DIV_GAP
-  gutterX = mainW + DIV_GAP / 2
-  const sideW = PAD * 2 + COL_W + 8
-  const heightOf = (div: (typeof side)[number]) =>
-    HEAD + 8 + (div.ceo ? CARD_H + 22 : 0) +
-    div.departments.reduce((h, dep) => h + LABEL_H + 8 + dep.members.length * (CARD_H + ROW_GAP), 0) + PAD - ROW_GAP + 6
-  const placeSide = (div: (typeof side)[number], top: number) => {
-    let cy = top + HEAD + 8
-    if (div.ceo) {
-      place(div.ceo.id, sideX + PAD, cy, { kind: 'agent', agentId: div.ceo.id })
-      if (mainCeo) edge(mainCeo, div.ceo.id, 'right', 'left', 'cross')
-      cy += CARD_H + 22
-    }
-    for (const dep of div.departments) {
-      place(`dept:${div.id}:${dep.id}`, sideX + PAD, cy, { kind: 'dept', divisionId: div.id, deptId: dep.id, compact: true }, { selectable: false })
-      cy += LABEL_H + 8
-      for (const m of dep.members) {
-        place(m.id, sideX + PAD + INDENT, cy, { kind: 'agent', agentId: m.id })
-        if (div.ceo) edge(div.ceo.id, m.id, 'left-src', 'left')
-        else if (mainCeo) edge(mainCeo, m.id, 'right', 'left', div.mode === 'manual' ? 'manual' : 'cross')
-        cy += CARD_H + ROW_GAP
-      }
-    }
-    place(`div:${div.id}`, sideX, top, { kind: 'division', divisionId: div.id, width: sideW, height: heightOf(div) }, { selectable: false, zIndex: -1 })
-  }
-  let below = TOP
-  for (const div of side.filter((d) => d.ceo)) {
-    placeSide(div, below)
-    below += heightOf(div) + SIDE_GAP
-  }
-  let above = TOP - SIDE_GAP
-  for (const div of side.filter((d) => !d.ceo)) {
-    above -= heightOf(div)
-    placeSide(div, above)
-    above -= SIDE_GAP
-  }
-
-  // ── owner on top ───────────────────────────────────────────
-  const totalW = side.length ? sideX + sideW : mainW
-  place(org.owner.id, main ? mainW / 2 + 40 : totalW / 2 - 120, 0, { kind: 'owner' })
-  if (mainCeo) edge(org.owner.id, mainCeo, 'bottom', 'top')
-
-  return withAdjacency(nodes, edges)
 }
 
 /**
- * The company as it works now: the owner, the CEO under them, and the selected project's team in a
- * frame below — a grid of at most five agents per row.
+ * `outputs`: the agents that have delivered something in this project. `spawned`: helpers Claude Code
+ * spawned for itself (by their Agent call id), shown under the team; `finished`: those with an output.
  */
-function leadLayout(
-  org: OrgDef,
-  ceoId: string,
-  repo: OrgDef['divisions'][number] | undefined,
-  place: (id: string, x: number, y: number, data: NodeData, extra?: Partial<Node<NodeData>>) => void,
-  edges: Edge<EdgeData>[],
-) {
-  const [head, ...sections] = repo?.departments ?? []
-  const groups = sections.filter((g) => g.members.length)
-  // At most five cards per row; a section with more wraps into even rows.
-  const shape = (n: number) => {
-    const rows = Math.max(1, Math.ceil(n / 5))
-    return { rows, perRow: Math.max(1, Math.ceil(n / rows)) }
+export function buildLayout(
+  title: string,
+  commands: RepoCommand[],
+  team: AgentRef[],
+  outputs: string[] = [],
+  spawned: string[] = [],
+  finished: string[] = [],
+): Layout {
+  const nodes: Node<NodeData>[] = []
+  const edges: Edge<EdgeData>[] = []
+  const place = (id: string, x: number, y: number, data: NodeData, extra: Partial<Node<NodeData>> = {}) =>
+    nodes.push({ id, position: { x, y }, data, type: data.kind, draggable: false, selectable: false, ...extra })
+  const link = (source: string, target: string, variant: EdgeVariant, lane?: number) =>
+    edges.push({ id: `${source}->${target}`, source, target, sourceHandle: 'right', targetHandle: 'left', type: 'pulse', data: { variant, lane } })
+
+  // ── left column: slash commands ────────────────────────────
+  const x0 = PAD + ENTRY_W
+  let left = HEAD
+  place('label:commands', x0, left, { kind: 'label', section: 'commands', count: commands.length })
+  left += LABEL_H
+  if (!commands.length) {
+    place('note:commands', x0, left, { kind: 'note', note: 'noCommands' })
+    left += NOTE_H
   }
-  const cols = Math.max(1, ...groups.map((g) => shape(g.members.length).perRow))
-  const ROW_H = CARD_H + 34
-  const gridW = INDENT + cols * CARD_W + (cols - 1) * COL_GAP
-  const w = Math.max(gridW + PAD * 2, 560)
-  const link = (source: string, target: string, sourceHandle: string, targetHandle: string, centerY?: number) =>
-    edges.push({ id: `${source}->${target}`, source, target, sourceHandle, targetHandle, type: 'pulse', data: { variant: 'tree', centerY } })
-
-  place(org.owner.id, w / 2 - CEO_W / 2, 0, { kind: 'owner' })
-  place(ceoId, w / 2 - CEO_W / 2, TOP, { kind: 'agent', agentId: ceoId })
-  link(org.owner.id, ceoId, 'bottom', 'top')
-  if (!repo || !head) return
-
-  const top = TOP + CARD_H + 48
-  const headerY = top + 18
-  const headId = `dept:${repo.id}:${head.id}`
-  place(headId, PAD, headerY, { kind: 'dept', divisionId: repo.id, deptId: head.id, compact: false }, { selectable: false })
-  link(ceoId, headId, 'bottom', 'top')
-
-  // Cards start right of the gutter the edges run down, so no edge crosses a card or a label.
-  const left = (w - gridW) / 2 + INDENT
-  let y = headerY + DEPT_H + 18
-  for (const g of groups) {
-    place(`dept:${repo.id}:${g.id}`, left, y, { kind: 'dept', divisionId: repo.id, deptId: g.id, compact: true }, { selectable: false })
-    y += LABEL_H + 22
-    const { perRow, rows } = shape(g.members.length)
-    g.members.forEach((m, i) => {
-      const cy = y + Math.floor(i / perRow) * ROW_H
-      place(m.id, left + (i % perRow) * (CARD_W + COL_GAP), cy, { kind: 'agent', agentId: m.id })
-      // Down the gutter, then across the gap just above the card's row.
-      link(headId, m.id, 'bottom', 'top', cy - 17)
-    })
-    y += rows * ROW_H - 34 + 22
+  for (const c of commands) {
+    place(cmdNode(c.name), x0, left, { kind: 'command', command: c })
+    left += CMD_H + GAP
   }
-  const bottom = groups.length ? y - 22 + PAD : headerY + DEPT_H + PAD
-  place(`div:${repo.id}`, 0, top, { kind: 'division', divisionId: repo.id, width: w, height: bottom - top }, { selectable: false, zIndex: -1 })
-}
 
-function withAdjacency(nodes: Node<NodeData>[], edges: Edge<EdgeData>[]): Layout {
-  const adjacency: Layout['adjacency'] = new Map()
-  const link = (a: string, b: string, edgeId: string, forward: boolean) => {
-    if (!adjacency.has(a)) adjacency.set(a, [])
-    adjacency.get(a)!.push({ edgeId, other: b, forward })
+  // ── right column: the team, one section per engine ────────
+  const x1 = x0 + CMD_W + MID
+  let right = HEAD
+  const ids = new Set(team.map((a) => a.id))
+  const sections = (['claude', 'codex'] as const)
+    .map((rt) => ({ rt, members: team.filter((a) => (a.runtime === 'codex' ? 'codex' : 'claude') === rt) }))
+    .filter((s) => s.members.length)
+  if (!sections.length && !spawned.length) {
+    place('note:agents', x1, right + LABEL_H, { kind: 'note', note: 'noAgents' })
+    right += LABEL_H + NOTE_H
   }
-  for (const e of edges) {
-    link(e.source, e.target, e.id, true)
-    link(e.target, e.source, e.id, false)
-  }
-  return { nodes, edges, adjacency }
-}
-
-/** Shortest path of edges between two nodes (undirected BFS). */
-export function findPath(layout: Layout, from: string, to: string): { edgeId: string; forward: boolean }[] | null {
-  if (from === to) return []
-  const prev = new Map<string, { node: string; edgeId: string; forward: boolean }>()
-  const queue = [from]
-  const seen = new Set([from])
-  while (queue.length) {
-    const cur = queue.shift()!
-    for (const n of layout.adjacency.get(cur) ?? []) {
-      if (seen.has(n.other)) continue
-      seen.add(n.other)
-      prev.set(n.other, { node: cur, edgeId: n.edgeId, forward: n.forward })
-      if (n.other === to) {
-        const path: { edgeId: string; forward: boolean }[] = []
-        let at = to
-        while (at !== from) {
-          const p = prev.get(at)!
-          path.unshift({ edgeId: p.edgeId, forward: p.forward })
-          at = p.node
-        }
-        return path
+  // ── outputs: each agent's latest delivery, on its row ─────
+  const x2 = x1 + CARD_W + OUT_GAP
+  const delivered = new Set(outputs.filter((id) => ids.has(id)))
+  const done = new Set(finished)
+  const outCount = delivered.size + spawned.filter((aid) => done.has(aid)).length
+  if (outCount) place('label:outputs', x2, HEAD, { kind: 'label', section: 'outputs', count: outCount })
+  sections.forEach(({ rt, members }, i) => {
+    if (i) right += SECTION_GAP - GAP
+    place(`label:${rt}`, x1, right, { kind: 'label', section: rt, count: members.length })
+    right += LABEL_H
+    for (const a of members) {
+      place(a.id, x1, right, { kind: 'agent', agentId: a.id })
+      if (delivered.has(a.id)) {
+        place(outNode(a.id), x2, right, { kind: 'result', agentId: a.id })
+        link(a.id, outNode(a.id), 'output')
       }
-      queue.push(n.other)
+      right += CARD_H + GAP
+    }
+  })
+  // Helpers Claude Code spawned on its own: under the team while they run, then their output.
+  if (spawned.length) {
+    if (sections.length) right += SECTION_GAP - GAP
+    place('label:spawned', x1, right, { kind: 'label', section: 'spawned', count: spawned.length })
+    right += LABEL_H
+    for (const aid of spawned) {
+      const id = spawnedNode(aid)
+      place(id, x1, right, { kind: 'spawned', aid })
+      if (done.has(aid)) {
+        place(outNode(id), x2, right, { kind: 'result', agentId: id, aid })
+        link(id, outNode(id), 'output')
+      }
+      right += CARD_H + GAP
     }
   }
-  return null
+
+  const width = (outCount ? x2 + OUT_W : x1 + CARD_W) + PAD
+  const height = Math.max(left, right) - GAP + LANE_H + PAD / 2
+  place('frame', 0, 0, { kind: 'frame', title, width, height }, { zIndex: -1 })
+
+  // The chat (and the organizer behind it) comes in at the bottom left, like the message box beside it.
+  place(ENTRY, PAD / 2, height - PAD / 2 - LANE_H + 12, { kind: 'entry' })
+  for (const c of commands) {
+    link(ENTRY, cmdNode(c.name), 'entry')
+    for (const id of c.agents ?? []) if (ids.has(id)) link(cmdNode(c.name), id, 'link')
+  }
+  // The organizer to every agent: shown while that agent is at work.
+  for (const a of team) link(ENTRY, a.id, 'lead', x1 - LANE_IN)
+  for (const aid of spawned) link(ENTRY, spawnedNode(aid), 'lead', x1 - LANE_IN)
+  return { nodes, edges }
 }
