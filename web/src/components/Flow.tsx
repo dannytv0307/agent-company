@@ -2,8 +2,9 @@ import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useSta
 import { Handle, Position, ReactFlow, getSmoothStepPath, useReactFlow, useUpdateNodeInternals, type Edge, type EdgeProps, type Node, type NodeProps } from '@xyflow/react'
 import { agentOf, duration, ago, shortPath, stepOf, useFlow, type Selection } from '../context.ts'
 import { buildLayout, filesHeight, lineage, livePath, SETUP_ROWS, type EdgeData, type NodeData } from '../layout.ts'
-import { displayName, groupOf, keyOf, originOf, scopeLabel, sorted } from '../setup.ts'
+import { displayName, groupOf, keyOf, kindLabel, originOf, scopeLabel, sorted, STATUS_TEXT } from '../setup.ts'
 import { send } from '../vscode.ts'
+import { pendingStep, waitingText } from '../../../shared/waiting.ts'
 
 type FlowNode = Node<NodeData>
 type FlowEdge = Edge<EdgeData>
@@ -83,11 +84,13 @@ function AgentNode({ data, id }: NodeProps<FlowNode>) {
   const main = a.kind === 'main'
   const running = a.status === 'running' && (!main || view.status === 'working')
   const step = [...a.steps].reverse().find((s) => s.status === 'running')
-  const doing = main && !view.turn ? 'Waiting for a prompt' : running ? (step ? `${step.tool} ${step.label}` : main ? (a.said ? 'Writing…' : 'Thinking…') : 'Starting…') : a.status === 'error' ? (main ? 'Stopped' : 'Failed') : 'Done'
+  const wait = waitingText(view)
+  const asking = !!wait && pendingStep(view)?.agent.id === a.id
+  const doing = asking ? `Waiting for you: ${wait}` : main && !view.turn ? 'Waiting for a prompt' : running ? (step ? `${step.tool} ${step.label}` : main ? (a.said ? 'Writing…' : 'Thinking…') : 'Starting…') : a.status === 'error' ? (main ? 'Stopped' : 'Failed') : 'Done'
   const elapsed = (a.end ?? (running ? now : a.start)) - a.start
   const def = setup.byNode.get(id)?.find((i) => i.kind === 'agent')
   return (
-    <div className={`node agent ${main ? 'main' : 'sub'} st-${running ? 'running' : a.status}${same(selected, { kind: 'agent', id: a.id }) ? ' selected' : ''}`}>
+    <div className={`node agent ${main ? 'main' : 'sub'} st-${asking ? 'waiting' : running ? 'running' : a.status}${same(selected, { kind: 'agent', id: a.id }) ? ' selected' : ''}`}>
       <In />
       <Out />
       <FromSetup />
@@ -100,7 +103,7 @@ function AgentNode({ data, id }: NodeProps<FlowNode>) {
       </div>
       {main && a.model && <div className="agent-model">{a.model.replace(/^claude-/, '')}</div>}
       {!main && <div className="agent-title">{a.title}</div>}
-      <div className={`agent-doing${running ? ' live' : ''}`}>{doing}</div>
+      <div className={`agent-doing${asking ? ' waiting' : running ? ' live' : ''}`}>{doing}</div>
       <div className="agent-meta">
         {!main && def && (
           <span className={`scope sc-${def.scope}`} title={def.path ?? originOf(def)}>
@@ -123,12 +126,14 @@ function StepNode({ data }: NodeProps<FlowNode>) {
   if (!hit) return null
   const s = hit.step
   return (
-    <div className={`node step st-${s.status}${same(selected, { kind: 'step', id: s.id }) ? ' selected' : ''}`} title={`${s.tool} ${s.label}`}>
+    <div className={`node step st-${waitingText(view) && pendingStep(view)?.step.id === s.id ? 'waiting' : s.status}${same(selected, { kind: 'step', id: s.id }) ? ' selected' : ''}`} title={`${s.tool} ${s.label}`}>
       <In />
       <span className="glyph">{glyph(s.tool)}</span>
       <span className="step-tool">{s.tool}</span>
       <span className="step-label">{s.label}</span>
-      <span className="step-time">{s.status === 'running' ? duration(now - s.start) : s.end ? duration(s.end - s.start) : ''}</span>
+      <span className="step-time">
+        {waitingText(view) && pendingStep(view)?.step.id === s.id ? 'needs you' : s.status === 'running' ? duration(now - s.start) : s.end ? duration(s.end - s.start) : ''}
+      </span>
       <span className="step-mark">{s.status === 'error' ? '✗' : s.status === 'done' ? '✓' : ''}</span>
     </div>
   )
@@ -197,8 +202,10 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
   const usedBy = (key: string) => setup.uses.get(key)
   const live = items.some((i) => usedBy(keyOf(i))?.some((u) => u.live))
   const used = items.filter((i) => usedBy(keyOf(i))?.length).length
+  const found = data.group === 'found'
+  const trouble = items.filter((i) => i.status === 'failed' || i.status === 'needs-auth').length
   return (
-    <div className={`node setup${live ? ' live' : used ? ' used' : ''}${selected?.kind === 'setup' && selected.group === data.group ? ' selected' : ''}`}>
+    <div className={`node setup${found ? ' found' : live ? ' live' : used ? ' used' : ''}${selected?.kind === 'setup' && selected.group === data.group ? ' selected' : ''}`}>
       <Out />
       {/* One handle per row, so an edge leaves from the very item in use. Rows start 41px down (border,
           padding, header) and are 22px high. */}
@@ -210,6 +217,7 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
         <span className="setup-title">{g.title}</span>
         <span className="count">{items.length}</span>
         {used > 0 && data.group !== 'memory' && <span className="in-use">{used} in use</span>}
+        {!used && trouble > 0 && <span className="in-use trouble">{trouble} not connected</span>}
       </div>
       <ul>
         {items.length === 0 && <li className="hint">{g.hint}</li>}
@@ -219,10 +227,12 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
           return (
             <li
               key={keyOf(i)}
-              className={`setup-row${state}${i.scope === 'builtin' || i.scope === 'connector' ? ' soft' : ''}${selected?.kind === 'setup' && selected.item === keyOf(i) ? ' picked' : ''}`}
+              className={`setup-row${state}${i.status ? ` ms-${i.status}` : ''}${i.scope === 'builtin' || i.scope === 'connector' ? ' soft' : ''}${selected?.kind === 'setup' && selected.item === keyOf(i) ? ' picked' : ''}`}
             >
               <button
-                title={[displayName(i), i.description].filter(Boolean).join('\n')}
+                title={[displayName(i), i.status && (i.error ? `${STATUS_TEXT[i.status]}: ${i.error}` : STATUS_TEXT[i.status]), i.unloaded ?? i.description]
+                  .filter(Boolean)
+                  .join('\n')}
                 onClick={(e) => {
                   e.stopPropagation()
                   select({ kind: 'setup', group: data.group, item: keyOf(i) })
@@ -230,7 +240,7 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
               >
                 <i />
                 <span className="setup-name">{displayName(i)}</span>
-                <span className={`scope sc-${i.scope}`}>{scopeLabel(i)}</span>
+                <span className={`scope sc-${found ? 'found' : i.scope}`}>{found ? kindLabel(i) : scopeLabel(i)}</span>
               </button>
             </li>
           )
@@ -403,26 +413,38 @@ function Chips({ chips }: { chips: Chip[] }) {
 }
 
 function NowBar() {
-  const { view, setup } = useFlow()
+  const { view, setup, select } = useFlow()
   const paths = pathsOf(view, setup)
   if (!paths) return null
   const working = view.status === 'working'
   const background = !working && view.subagents.some((a) => a.status === 'running')
-  const shown = paths.branches.slice(0, 4)
+  const wait = waitingText(view)
+  const asked = pendingStep(view)
+  // The call waiting for an answer is already the first chip: not again in its branch.
+  const branches = wait && asked ? paths.branches.map((b) => b.filter((c) => !(c.to?.kind === 'step' && c.to.id === asked.step.id))).filter((b) => b.length) : paths.branches
+  const shown = branches.slice(0, 4)
   return (
-    <div className={`now${working || background ? ' live' : ''}`}>
-      <span className="now-label">{working ? 'Now' : background ? 'In background' : 'Last turn'}</span>
+    <div className={`now${wait ? ' waiting' : working || background ? ' live' : ''}`}>
+      <span className="now-label">{wait ? 'Needs you' : working ? 'Now' : background ? 'In background' : 'Last turn'}</span>
       <div className="chain">
         <Chips chips={paths.head} />
         <span className="chain-arrow">→</span>
       </div>
       <div className={`branches${shown.length > 1 ? ' many' : ''}`}>
+        {wait && (
+          <div className="chain ask">
+            <button className="chip ck-ask" onClick={() => asked && select({ kind: 'step', id: asked.step.id })} title="Answer it in Claude Code">
+              <span className="chip-label">{wait}</span>
+              <em>answer in Claude Code</em>
+            </button>
+          </div>
+        )}
         {shown.map((b, n) => (
           <div className="chain" key={n}>
             <Chips chips={b} />
           </div>
         ))}
-        {paths.branches.length > shown.length && <span className="chain-more">+{paths.branches.length - shown.length} more at work</span>}
+        {branches.length > shown.length && <span className="chain-more">+{branches.length - shown.length} more at work</span>}
       </div>
     </div>
   )
@@ -441,7 +463,7 @@ export function Flow() {
   const focus = useMemo(() => (hover && layout.nodes.some((n) => n.id === hover) ? lineage(layout.edges, hover) : live), [hover, layout, live])
   // Nodes are dimmed by a stylesheet, so their objects (and React Flow's measurements) stay as they are.
   const focusCss = focus
-    ? `.canvas .react-flow__node:not(.react-flow__node-frame){opacity:.42}${[...focus].map((id) => `.canvas .react-flow__node[data-id="${id.replace(/"/g, '')}"]`).join(',')}{opacity:1}`
+    ? `.canvas .react-flow__node:not(.react-flow__node-frame){opacity:.72;filter:grayscale(.9)}${[...focus].map((id) => `.canvas .react-flow__node[data-id="${id.replace(/"/g, '')}"]`).join(',')}{opacity:1;filter:none}`
     : ''
 
   // Refit when the shape changes (a new turn, a subagent, more tools) or the tab is resized.

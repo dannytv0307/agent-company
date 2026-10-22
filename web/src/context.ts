@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
-import type { Agent, SessionView, SetupKind, Step } from '../../shared/model.ts'
-import type { SetupModel } from './setup.ts'
+import type { Agent, SessionView, Step } from '../../shared/model.ts'
+import type { GroupKey, SetupModel } from './setup.ts'
 
 /** What the inspector on the right shows. */
 export type Selection =
@@ -10,7 +10,7 @@ export type Selection =
   | { kind: 'output'; of: string }
   | { kind: 'files' }
   /** A setup card, or one item of it (by keyOf). */
-  | { kind: 'setup'; group: SetupKind; item?: string }
+  | { kind: 'setup'; group: GroupKey; item?: string }
 
 export interface Ctx {
   view: SessionView

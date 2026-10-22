@@ -2,7 +2,7 @@
   "name": "agent-trace",
   "displayName": "Agent Trace",
   "description": "See what Claude Code is doing, live, against your setup: CLAUDE.md, agents, slash commands, skills, MCP servers, hooks and plugins, lit up as they are used.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "dannytv0307",
   "license": "MIT",
   "type": "module",
@@ -85,6 +85,11 @@
             "Rose"
           ],
           "description": "The colour that marks work in progress in the flow."
+        },
+        "agentTrace.notifyWhenWaiting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when Claude Code is waiting for you: a permission to grant, a question to answer, a plan to approve."
         }
       }
     },

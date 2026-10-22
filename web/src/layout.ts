@@ -3,8 +3,8 @@
 // (subagents, then its latest tool calls), and what came out (its reply, the subagents' reports, the
 // files written).
 import type { Edge, Node } from '@xyflow/react'
-import type { SessionView, SetupKind } from '../../shared/model.ts'
-import { GROUPS, keyOf, sorted, type SetupModel } from './setup.ts'
+import type { SessionView } from '../../shared/model.ts'
+import { GROUPS, keyOf, sorted, type GroupKey, type SetupModel } from './setup.ts'
 
 export const SIZE = {
   prompt: { w: 270, h: 104 },
@@ -36,7 +36,7 @@ export type NodeData =
   | { kind: 'step'; stepId: string }
   | { kind: 'result'; of: string }
   | { kind: 'files' }
-  | { kind: 'setup'; group: SetupKind }
+  | { kind: 'setup'; group: GroupKey }
   /** A titled border around one part of the flow (the setup, the prompt, the subagents…), behind its cards. */
   | { kind: 'frame'; title: string; members: string[] }
 
@@ -83,7 +83,7 @@ export function buildLayout(v: SessionView, setup: SetupModel): Layout {
   const working = v.status === 'working'
   const own = v.main.steps.filter((s) => !SPAWNS.has(s.tool)) // spawns are drawn as the subagent
   const steps = own.slice(-SHOWN_STEPS)
-  const groups = GROUPS.filter((g) => g.always || setup.items.some((i) => i.kind === g.kind))
+  const groups = GROUPS.filter((g) => g.always || sorted(setup, g.kind).length)
 
   // Columns, left to right, each in its frame: setup · prompt · Claude · subagents and tools · output.
   const frameW = (content: number) => content + 2 * PAD
@@ -152,9 +152,9 @@ export function buildLayout(v: SessionView, setup: SetupModel): Layout {
   frame('frame:out', 'Output', [...outs.map(([of]) => `out:${of}`), ...(written.length ? ['files'] : [])])
 
   // ── the setup, on the far left ──
-  const setupEdges: { id: string; target: string; handle: string; fromY: number; live: boolean; kind: SetupKind }[] = []
+  const setupEdges: { id: string; target: string; handle: string; fromY: number; live: boolean; kind: GroupKey }[] = []
   if (groups.length) {
-    const heights = groups.map((g) => setupHeight(setup.items.filter((i) => i.kind === g.kind).length))
+    const heights = groups.map((g) => setupHeight(sorted(setup, g.kind).length))
     const total = heights.reduce((a, h) => a + h + GAP, -GAP)
     let ys = mid - total / 2
     groups.forEach((g, n) => {
@@ -175,7 +175,7 @@ export function buildLayout(v: SessionView, setup: SetupModel): Layout {
         }
       })
     })
-    frame('frame:setup', 'Setup · .claude', groups.map((g) => `setup:${g.kind}`))
+    frame('frame:setup', setup.source === 'session' ? 'Setup · as loaded this session' : 'Setup · read from files', groups.map((g) => `setup:${g.kind}`))
   }
 
   // ── the frames, from their cards' bounds, behind everything ──

@@ -19,6 +19,13 @@ Agent Trace only watches. It runs no agents, has no chat and needs no configurat
   - **Tools**: the latest tool calls.
   - **Output**: the reply, each subagent's report, and the files changed. Click a file to open its diff.
 - **The Now bar** at the top shows where work is going at a glance, e.g. `/ship (project command) → Claude → code-reviewer (project agent) → Grep TODO`. Each step is clickable.
+- **When Claude needs you**, Agent Trace says what for: a permission to run a tool, a question, a plan to approve. It shows in four places:
+  - the Now bar, e.g. *Needs you · Claude asks to run Bash npm test*;
+  - the header;
+  - the card and tool call that wait, in amber;
+  - the status bar.
+
+  A notification shows once per wait, with a button to open Claude Code. Turn it off with `agentTrace.notifyWhenWaiting`. The signal is Claude Code's own session status (`~/.claude/sessions`), so nothing is installed or changed.
 - **Live edges** glow while work is in progress, with comets running along them. An edge from the setup leaves from the exact agent, command, skill or MCP server in use. While Claude works, everything off the current path fades. Hover any card to trace its path instead.
 - **Frames** separate the parts of the flow: setup, prompt and slash command, main agent, subagents, tools and output. A frame lights up while work goes through it. Items not used in this turn are faded.
 - **Looks like part of VS Code**: backgrounds, cards, lines and text follow your colour theme, whether light, dark or high contrast. The accent that marks work in progress follows your theme too, or you can pick gold, terracotta, ocean, teal, violet or rose with the dots in the header, or set `agentTrace.accentColor`.
@@ -26,6 +33,10 @@ Agent Trace only watches. It runs no agents, has no chat and needs no configurat
 - **The Agent Trace sidebar** lists the Claude Code sessions at work in this folder right now, and its setup. The Flow tab follows the latest session unless you pick one from its session list.
 - **The status bar** shows what is running now, e.g. `Claude · Bash npm test · 2 subagents`.
 - **The Explorer** marks files being edited in the current turn with a ● badge.
+
+## Setup as Claude Code loaded it
+
+People organise their Claude Code configuration in many ways: `.claude/` folders, `~/.claude`, plugins with their own folders, settings managed by an organisation, repos of configs to copy from. Agent Trace does not guess. At the start of a session, Claude Code writes into its transcript what it loaded: skills, agents, MCP servers and whether they connected, and instruction files. Agent Trace shows that, and uses the files only to say where each item is defined. What sits in the folder but is not loaded goes in a card of its own, **Here, not loaded**, with the reason and what to do about it. Before a folder's first session, the setup is read from the files alone, and the title says so.
 
 ## How it works
 

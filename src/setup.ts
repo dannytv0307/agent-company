@@ -7,10 +7,13 @@ import path from 'node:path'
 import type { Setup, SetupItem, SetupScope } from '../shared/model.ts'
 import { claudeHome } from './claude.ts'
 
+/** Until a session says which agents are built in (they vary by version), the usual ones. */
 const BUILTIN_AGENTS: [string, string][] = [
   ['general-purpose', 'Researches, searches code and runs multi-step tasks.'],
   ['Explore', 'Read-only search across many files.'],
   ['Plan', 'Designs an implementation plan.'],
+  ['claude-code-guide', 'Answers questions about Claude Code itself.'],
+  ['statusline-setup', 'Sets up the status line.'],
 ]
 
 function readText(file: string): string | undefined {
@@ -92,6 +95,8 @@ function markdownFiles(dir: string, depth = 3): string[] {
 interface Source {
   scope: SetupScope
   plugin?: string
+  /** Found, but Claude Code does not load it: why. */
+  unloaded?: string
 }
 
 function agents(dir: string, src: Source, out: SetupItem[]) {
@@ -150,7 +155,7 @@ function hooks(config: any, src: Source, file: string, out: SetupItem[]) {
     for (const g of groups) {
       const cmds = (Array.isArray(g?.hooks) ? g.hooks : []).map((h: any) => clip(String(h?.command ?? h?.prompt ?? h?.type ?? ''), 120)).filter(Boolean)
       const matcher = typeof g?.matcher === 'string' && g.matcher ? g.matcher : ''
-      out.push({ kind: 'hook', name: matcher ? `${event} · ${matcher}` : event, ...src, path: file, facts: cmds })
+      out.push({ kind: 'hook', name: matcher ? `${event} · ${clip(matcher, 60)}` : event, ...src, path: file, facts: cmds })
     }
   }
 }
@@ -257,16 +262,60 @@ export function readSetup(folder: string): Setup {
       facts: [key.includes('@') && `from ${key.split('@')[1]}`, entry?.version && `version ${entry.version}`, !dir && 'not installed'].filter(Boolean) as string[],
     })
     if (!dir || !isDir(dir)) continue
-    const from: Source = { scope: 'plugin', plugin: name }
-    agents(path.join(dir, 'agents'), from, items)
-    commands(path.join(dir, 'commands'), from, items)
-    skills(path.join(dir, 'skills'), from, items)
-    const pluginMcp = path.join(dir, '.mcp.json')
-    const mcp = manifest?.mcpServers && typeof manifest.mcpServers === 'object' ? manifest.mcpServers : readJson(pluginMcp)
-    // .mcp.json is either { mcpServers: {…} } or the servers themselves.
-    mcpServers(mcp?.mcpServers ?? mcp, from, manifestFile && manifest?.mcpServers ? manifestFile : pluginMcp, items)
-    const hooksFile = path.join(dir, 'hooks', 'hooks.json')
-    hooks(readJson(hooksFile)?.hooks, from, hooksFile, items)
+    pluginContent(dir, manifest, { scope: 'plugin', plugin: name }, items)
   }
+
+  foundHere(folder, new Set([...enabled.keys()].map((k) => k.split('@')[0])), items)
   return { items }
+}
+
+/** Folders a plugin manifest names for one kind of content, on top of the default one. */
+function manifestPaths(dir: string, manifest: any, key: string): string[] {
+  const v = manifest?.[key]
+  const extra = (typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []).map((p: string) => path.resolve(dir, p))
+  return [...new Set([path.join(dir, key), ...extra])]
+}
+
+/** What a plugin brings: agents, commands, skills, MCP servers, hooks — where its manifest says. */
+function pluginContent(dir: string, manifest: any, from: Source, items: SetupItem[]) {
+  for (const d of manifestPaths(dir, manifest, 'agents')) agents(d, from, items)
+  for (const d of manifestPaths(dir, manifest, 'commands')) commands(d, from, items)
+  for (const d of manifestPaths(dir, manifest, 'skills')) skills(d, from, items)
+  const manifestFile = path.join(dir, '.claude-plugin', 'plugin.json')
+  const pluginMcp = typeof manifest?.mcpServers === 'string' ? path.resolve(dir, manifest.mcpServers) : path.join(dir, '.mcp.json')
+  const mcp = manifest?.mcpServers && typeof manifest.mcpServers === 'object' ? manifest.mcpServers : readJson(pluginMcp)
+  // .mcp.json is either { mcpServers: {…} } or the servers themselves.
+  mcpServers(mcp?.mcpServers ?? mcp, from, manifest?.mcpServers && typeof manifest.mcpServers === 'object' ? manifestFile : pluginMcp, items)
+  const hooksFile = typeof manifest?.hooks === 'string' ? path.resolve(dir, manifest.hooks) : path.join(dir, 'hooks', 'hooks.json')
+  hooks(readJson(hooksFile)?.hooks, from, hooksFile, items)
+}
+
+/**
+ * Claude Code configuration that sits in this folder but that Claude Code does not load from here:
+ * a plugin's source (loaded only once installed), or agents/, commands/, skills/, rules/ kept at the root
+ * of a repo of configs (loaded only from .claude/ or ~/.claude). Shown apart, with what to do.
+ */
+function foundHere(folder: string, enabledPlugins: Set<string>, items: SetupItem[]) {
+  const manifest = readJson(path.join(folder, '.claude-plugin', 'plugin.json'))
+  const covered = new Set<string>()
+  if (manifest && typeof manifest === 'object') {
+    const name = String(manifest.name ?? path.basename(folder))
+    for (const k of ['agents', 'commands', 'skills', 'hooks']) for (const d of manifestPaths(folder, manifest, k)) covered.add(path.resolve(d))
+    if (!enabledPlugins.has(name))
+      pluginContent(folder, manifest, { scope: 'project', plugin: name, unloaded: `Part of the plugin “${name}”, which is this folder: Claude Code loads a plugin only once it is installed. To use it, run /plugin marketplace add ./ and then /plugin install ${name}.` }, items)
+  }
+  const loose = (dir: string, what: string) =>
+    `In ./${dir}, where Claude Code does not look: it loads ${what} from .claude/${dir} (this project) or ~/.claude/${dir} (every project). Copy it there to use it.`
+  const at = (d: string) => path.join(folder, d)
+  if (!covered.has(path.resolve(at('agents')))) agents(at('agents'), { scope: 'project', unloaded: loose('agents', 'agents') }, items)
+  if (!covered.has(path.resolve(at('commands')))) commands(at('commands'), { scope: 'project', unloaded: loose('commands', 'slash commands') }, items)
+  if (!covered.has(path.resolve(at('skills')))) skills(at('skills'), { scope: 'project', unloaded: loose('skills', 'skills') }, items)
+  for (const file of markdownFiles(at('rules'), 1)) {
+    const text = readText(file) ?? ''
+    items.push({ kind: 'memory', name: `rules/${path.basename(file)}`, scope: 'project', description: clip(firstLine(text), 200), path: file, unloaded: loose('rules', 'rules') })
+  }
+  if (!covered.has(path.resolve(at('hooks')))) {
+    const file = path.join(at('hooks'), 'hooks.json')
+    hooks(readJson(file)?.hooks, { scope: 'project', unloaded: `In ./hooks/hooks.json, which Claude Code does not read: hooks go in the "hooks" of .claude/settings.json (this project) or ~/.claude/settings.json.` }, file, items)
+  }
 }

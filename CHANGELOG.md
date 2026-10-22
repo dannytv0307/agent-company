@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0
+
+- **Claude needs you:** when Claude Code waits for you, Agent Trace says so and names what it waits for: a permission to run a tool, a question, a plan to approve, a dialog. The signal comes from Claude Code's own session status. It shows in four places:
+  - the Now bar: *Needs you · Claude asks to run Bash npm test*;
+  - the header;
+  - the waiting card and tool call, in amber;
+  - the status bar, and the sidebar with a bell.
+- **Notification for waits:** a notification shows once per wait, with a button to open Claude Code. Turn it off with `agentTrace.notifyWhenWaiting`.
+- **Setup as Claude Code loaded it:** the setup is checked against what Claude Code itself announced in the session: its skills, agents, MCP servers and instruction files. It is right however your configuration is organised (plugins, managed settings, custom plugin paths, disabled servers…). With no session yet, it is read from files and says so.
+- **MCP connection status:** connected, failed (with the error) or waiting for sign-in.
+- **"Here, not loaded" card:** configuration that sits in the folder but that Claude Code does not load from there, each item with the reason and what to do about it. Examples:
+  - a plugin's source, which is loaded only once installed;
+  - agents/, commands/, skills/ or rules/ kept at the root of a repo of configs;
+  - a skill Claude Code skipped.
+- **Plugin manifests** that add their own folders for agents, commands, skills, hooks and MCP servers are followed.
+- **Clearer on and off:**
+  - cards off the current path turn grey instead of fading out;
+  - unused setup items keep readable text;
+  - items used this turn get a green tint, items at work an accent one.
+
 ## 0.2.0
 
 - **Now bar:** shows the path work is taking, e.g. `/ship → Claude → code-reviewer → Grep TODO`. Each step names where it comes from, and the bar keeps following subagents that run in the background after Claude replies.

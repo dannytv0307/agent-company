@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import type { Agent, SetupKind, Step } from '../../../shared/model.ts'
+import type { Agent, Step } from '../../../shared/model.ts'
 import { agentOf, ago, duration, shortPath, stepOf, useFlow, type Selection } from '../context.ts'
-import { displayName, groupOf, keyOf, scopeLabel, sorted } from '../setup.ts'
+import { displayName, groupOf, keyOf, kindLabel, scopeLabel, sorted, STATUS_TEXT, type GroupKey } from '../setup.ts'
 import { send } from '../vscode.ts'
 
 function FileActions({ file, writes }: { file: string; writes?: boolean }) {
@@ -133,7 +133,7 @@ function selectionFor(node: string): Selection | null {
 
 const SCOPES = 'project: this folder’s .claude/ (in git) · local: this folder, not in git · user: ~/.claude, every folder'
 
-function SetupDetails({ group, item }: { group: SetupKind; item?: string }) {
+function SetupDetails({ group, item }: { group: GroupKey; item?: string }) {
   const { setup, view, select } = useFlow()
   const g = groupOf(group)
   const items = sorted(setup, group)
@@ -149,11 +149,28 @@ function SetupDetails({ group, item }: { group: SetupKind; item?: string }) {
           ← {g.title}
         </button>
         <h2>{displayName(it)}</h2>
-        <div className={`status-line${live ? ' st-running' : uses.length ? ' st-done' : ''}`}>
+        <div className={`status-line${live ? ' st-running' : uses.length ? ' st-done' : it.status === 'failed' ? ' st-error' : it.unloaded || it.status === 'needs-auth' ? ' st-warn' : ''}`}>
           <span className="dot" />
-          {live ? 'In use now' : uses.length ? (group === 'memory' ? 'Loaded' : 'Used this turn') : 'Not used this turn'}
+          {it.unloaded
+            ? 'Not loaded'
+            : live
+              ? 'In use now'
+              : uses.length
+                ? group === 'memory'
+                  ? 'Loaded'
+                  : 'Used this turn'
+                : it.loaded
+                  ? 'Loaded, not used this turn'
+                  : 'Not used this turn'}
           <span className={`scope sc-${it.scope}`}>{scopeLabel(it)}</span>
         </div>
+        {it.unloaded && <p className="notice">{it.unloaded}</p>}
+        {it.status && (
+          <p className={`notice ms-${it.status}`}>
+            <b>{STATUS_TEXT[it.status]}</b>
+            {it.error ? ` — ${it.error}` : it.status === 'needs-auth' ? ' — sign in with /mcp in Claude Code.' : ''}
+          </p>
+        )}
         {it.description && <p className="lead">{it.description}</p>}
         {!!it.facts?.length && (
           <ul className="fact-list">
@@ -202,20 +219,31 @@ function SetupDetails({ group, item }: { group: SetupKind; item?: string }) {
         {items.length} {items.length === 1 ? 'item' : 'items'}
         {group !== 'memory' && ` · ${used} used this turn`}
       </div>
-      <p className="muted small">{SCOPES}</p>
+      {group === 'found' ? (
+        <p className="notice">
+          Claude Code configuration that sits in this folder, but that Claude Code does not load from here. Each item says why, and what would load it.
+        </p>
+      ) : (
+        <p className="muted small">
+          {SCOPES}
+          {setup.source === 'session' ? ' · checked against what this session loaded' : ' · read from files: no session to check against yet'}
+        </p>
+      )}
       {items.length === 0 && <p className="lead">{g.hint}</p>}
       <ul className="setup-list">
         {items.map((i) => {
           const u = usesOf(keyOf(i))
           return (
-            <li key={keyOf(i)} className={u.some((x) => x.live) ? 'live' : u.length ? 'used' : ''}>
+            <li key={keyOf(i)} className={`${u.some((x) => x.live) ? 'live' : u.length ? 'used' : ''}${i.status ? ` ms-${i.status}` : ''}`}>
               <button onClick={() => select({ kind: 'setup', group, item: keyOf(i) })}>
                 <span className="setup-line">
                   <i />
                   <b>{displayName(i)}</b>
-                  <span className={`scope sc-${i.scope}`}>{scopeLabel(i)}</span>
+                  <span className={`scope sc-${group === 'found' ? 'found' : i.scope}`}>{group === 'found' ? kindLabel(i) : scopeLabel(i)}</span>
                 </span>
-                {i.description && <small>{i.description}</small>}
+                {(i.status && i.status !== 'connected' ? `${STATUS_TEXT[i.status]}${i.error ? `: ${i.error}` : ''}` : i.description) && (
+                  <small>{i.status && i.status !== 'connected' ? `${STATUS_TEXT[i.status]}${i.error ? `: ${i.error}` : ''}` : i.description}</small>
+                )}
               </button>
             </li>
           )

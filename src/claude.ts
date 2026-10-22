@@ -5,7 +5,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Agent, FileTouch, SessionSummary, SessionView, Step } from '../shared/model.ts'
+import type { Agent, FileTouch, Loaded, McpStatus, SessionSummary, SessionView, Step } from '../shared/model.ts'
 
 /** Where Claude Code keeps its data (CLAUDE_CONFIG_DIR moves it). */
 export const claudeHome = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -18,6 +18,50 @@ export function projectDirFor(folder: string): string | undefined {
   // The drive letter's case depends on who started the session ("c:\" in VS Code, "C:\" in a terminal).
   const hit = readdirSync(root).find((d) => d.toLowerCase() === want)
   return hit ? path.join(root, hit) : undefined
+}
+
+// ── sessions open right now ───────────────────────────────────────────────
+
+export interface Live {
+  status: 'busy' | 'idle' | 'waiting' | string
+  waitingFor?: string
+  since: number
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM' // exists, not ours to signal
+  }
+}
+
+/**
+ * Every open Claude Code session by session id, as Claude Code reports it in ~/.claude/sessions/<pid>.json:
+ * busy, idle, or waiting for the user (and for what). Files of processes that have gone are skipped.
+ */
+export function liveSessions(): Map<string, Live> {
+  const dir = path.join(claudeHome(), 'sessions')
+  const out = new Map<string, Live>()
+  let names: string[]
+  try {
+    names = readdirSync(dir).filter((n) => /^\d+\.json$/.test(n))
+  } catch {
+    return out
+  }
+  for (const n of names) {
+    let j: any
+    try {
+      j = JSON.parse(readFileSync(path.join(dir, n), 'utf8'))
+    } catch {
+      continue
+    }
+    if (typeof j?.sessionId !== 'string' || typeof j.status !== 'string') continue
+    if (typeof j.pid === 'number' && !alive(j.pid)) continue
+    out.set(j.sessionId, { status: j.status, waitingFor: typeof j.waitingFor === 'string' ? j.waitingFor : undefined, since: Number(j.statusUpdatedAt) || Date.now() })
+  }
+  return out
 }
 
 // ── reading files as they grow ────────────────────────────────────────────
@@ -216,6 +260,8 @@ export class SessionReader {
   private dirty = true
   /** Claude Code notes the latest prompt as it goes: the turn's prompt when the read began after it. */
   private lastPrompt = ''
+  /** Tool names Claude Code announced, for the MCP servers they belong to. */
+  private tools = new Set<string>()
 
   constructor(
     readonly id: string,
@@ -233,7 +279,8 @@ export class SessionReader {
       files: [],
     }
     // Long sessions run to tens of megabytes; the current turn is near the end.
-    this.main.seekTail(24 << 20)
+    // What Claude Code loaded is announced at the start, and the start may be before the tail read.
+    if (this.main.seekTail(24 << 20)) for (const line of headLines(file, Math.min(6 << 20, this.main.offset))) if (line.includes('"type":"attachment"')) this.ingest([line], undefined)
     this.ingest(this.main.read(), undefined)
     this.pollSubagents()
   }
@@ -347,7 +394,55 @@ export class SessionReader {
       case 'assistant':
         this.onAssistant(e, owner, at)
         return
+      case 'attachment':
+        if (!owner) this.onListing(e.attachment)
+        return
     }
+  }
+
+  /**
+   * Claude Code's own listings of what it loaded: skills, agents, MCP tools and servers, instruction
+   * files. Initial ones at the start of a session, deltas as things change.
+   */
+  private onListing(a: any) {
+    if (!a || typeof a !== 'object') return
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').map(String) : [])
+    const L: Loaded = (this.view.loaded ??= { skills: [], agents: [], builtinAgents: [], mcp: [], instructions: [] })
+    switch (a.type) {
+      case 'skill_listing':
+        if (Array.isArray(a.names)) L.skills = strings(a.names)
+        break
+      case 'agent_listing_delta': {
+        const types = new Set(a.isInitial ? [] : L.agents)
+        for (const t of strings(a.addedTypes)) types.add(t)
+        for (const t of strings(a.removedTypes)) types.delete(t)
+        L.agents = [...types]
+        if (Array.isArray(a.builtInTypes)) L.builtinAgents = strings(a.builtInTypes)
+        break
+      }
+      case 'deferred_tools_delta': {
+        for (const t of [...strings(a.addedNames), ...strings(a.readdedNames)]) this.tools.add(t)
+        for (const t of strings(a.removedNames)) this.tools.delete(t)
+        const status = new Map<string, { status: McpStatus; error?: string }>()
+        for (const t of this.tools) {
+          const server = t.match(/^mcp__(.+?)__/)?.[1]
+          if (server) status.set(server, { status: 'connected' })
+        }
+        for (const n of strings(a.pendingMcpServers)) status.set(mcpKey(n), { status: 'pending' })
+        for (const n of strings(a.needsAuthMcpServers)) status.set(mcpKey(n), { status: 'needs-auth' })
+        for (const f of Array.isArray(a.failedMcpServers) ? a.failedMcpServers : [])
+          if (f && typeof f.name === 'string') status.set(mcpKey(f.name), { status: 'failed', error: typeof f.error === 'string' ? f.error : undefined })
+        L.mcp = [...status].map(([name, s]) => ({ name, ...s }))
+        break
+      }
+      case 'instructions':
+        for (const f of Array.isArray(a.files) ? a.files : [])
+          if (f && typeof f.path === 'string' && !L.instructions.some((x) => x.path === f.path)) L.instructions.push({ path: f.path, type: String(f.type ?? '') })
+        break
+      default:
+        return
+    }
+    this.dirty = true
   }
 
   /** Lines of older Claude Code versions, where subagents write into the main transcript. */
@@ -505,6 +600,23 @@ export class SessionReader {
       if (!f.by.includes(agent.id)) f.by.push(agent.id)
     } else f.reads++
     f.last = at
+  }
+}
+
+/** An MCP server's name as its tools carry it: "plugin:playwright:playwright" → "plugin_playwright_playwright". */
+export const mcpKey = (name: string) => name.replace(/[^A-Za-z0-9_-]/g, '_')
+
+/** The whole lines in the first `bytes` of a file. */
+function headLines(file: string, bytes: number): string[] {
+  const fd = openSync(file, 'r')
+  try {
+    const buf = Buffer.alloc(bytes)
+    const n = readSync(fd, buf, 0, bytes, 0)
+    const lines = buf.toString('utf8', 0, n).split('\n')
+    lines.pop() // cut
+    return lines
+  } finally {
+    closeSync(fd)
   }
 }
 

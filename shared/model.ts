@@ -83,6 +83,36 @@ export interface SessionView {
   cost?: number
   linesAdded?: number
   linesRemoved?: number
+  /** What Claude Code says it loaded in this session, when its transcript tells (see Loaded). */
+  loaded?: Loaded
+  /** Claude Code is waiting for the user: a permission to grant, a question, a dialog (see waiting.ts). */
+  waiting?: Waiting
+}
+
+/** As Claude Code reports it in ~/.claude/sessions/<pid>.json while the session is open. */
+export interface Waiting {
+  /** Claude Code's own word for it: "input needed", "dialog open", "sandbox request"… */
+  reason?: string
+  since: number
+}
+
+export type McpStatus = 'connected' | 'failed' | 'needs-auth' | 'pending'
+
+/**
+ * The setup as Claude Code itself resolved it, from the listings it writes into the transcript: every
+ * rule of precedence, plugin, managed setting and disabled item already applied. The ground truth the
+ * file scan is checked against.
+ */
+export interface Loaded {
+  /** Skill names, plugin ones as "plugin:skill". */
+  skills: string[]
+  /** Agent types, built-in ones included. */
+  agents: string[]
+  builtinAgents: string[]
+  /** MCP servers by their tool prefix ("github", "plugin_playwright_playwright", "claude_ai_Gmail"). */
+  mcp: { name: string; status: McpStatus; error?: string }[]
+  /** Instruction files Claude Code reported loading (auto memory, nested CLAUDE.md…). */
+  instructions: { path: string; type: string }[]
 }
 
 export interface SessionSummary {
@@ -90,6 +120,8 @@ export interface SessionSummary {
   title: string
   last: number
   status: SessionStatus
+  /** Claude Code is waiting for the user in this session. */
+  waiting?: boolean
 }
 
 // ── the setup: what Claude Code loads for this folder ────────────────────────
@@ -102,9 +134,10 @@ export type SetupKind = 'memory' | 'agent' | 'command' | 'skill' | 'mcp' | 'hook
  * - user: ~/.claude;
  * - plugin: an enabled plugin;
  * - builtin: part of Claude Code;
- * - connector: an MCP server seen in use but not configured in any file (e.g. a claude.ai connector).
+ * - connector: an MCP server seen in use but not configured in any file (e.g. a claude.ai connector);
+ * - session: loaded by Claude Code, from somewhere no file here explains (e.g. managed by an organisation).
  */
-export type SetupScope = 'project' | 'local' | 'user' | 'plugin' | 'builtin' | 'connector'
+export type SetupScope = 'project' | 'local' | 'user' | 'plugin' | 'builtin' | 'connector' | 'session'
 
 export interface SetupItem {
   kind: SetupKind
@@ -118,6 +151,13 @@ export interface SetupItem {
   path?: string
   /** A few short facts: "model: sonnet", "stdio · npx", "48 allow rules"… */
   facts?: string[]
+  /** Here, but not loaded by Claude Code — and why, with what to do about it. */
+  unloaded?: string
+  /** Confirmed loaded by the session's own listing. */
+  loaded?: boolean
+  /** For an MCP server, how its connection went in the session. */
+  status?: McpStatus
+  error?: string
 }
 
 export interface Setup {

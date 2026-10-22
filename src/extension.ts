@@ -6,7 +6,8 @@ import * as vscode from 'vscode'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { ACCENTS, type Accent, type FromWebview, type SessionSummary, type SessionView, type Setup, type SetupItem, type SetupKind, type ToWebview } from '../shared/model.ts'
-import { listSessions, projectDirFor, SessionReader } from './claude.ts'
+import { waitingText } from '../shared/waiting.ts'
+import { listSessions, liveSessions, projectDirFor, SessionReader, type Live } from './claude.ts'
 import { readSetup } from './setup.ts'
 
 let ctx: vscode.ExtensionContext
@@ -22,6 +23,10 @@ let following = true
 /** What Claude Code loads in this folder: CLAUDE.md, agents, commands, skills, MCP, hooks, plugins, settings. */
 let setup: Setup | undefined
 let setupKey = ''
+/** Open sessions as Claude Code reports them (busy, idle, waiting for the user), by session id. */
+let live = new Map<string, Live>()
+/** Waits already announced, so each one is announced once. */
+const announced = new Set<string>()
 
 const changed = new vscode.EventEmitter<void>()
 const setupChanged = new vscode.EventEmitter<void>()
@@ -44,6 +49,13 @@ function refreshSessions() {
   }
   claudeDir = folder ? projectDirFor(folder) : undefined
   sessions = claudeDir ? listSessions(claudeDir) : []
+  // An open session says itself whether it is at work; the transcript's age is only a guess.
+  for (const s of sessions) {
+    const l = live.get(s.id)
+    if (!l) continue
+    s.status = l.status === 'idle' ? 'idle' : 'working'
+    s.waiting = l.status === 'waiting'
+  }
   const wanted = following ? sessions[0] : (sessions.find((s) => s.id === reader?.id) ?? sessions[0])
   if (wanted && wanted.id !== reader?.id) show(wanted.id)
   if (!wanted) {
@@ -68,12 +80,19 @@ function refreshSetup(): boolean {
   return true
 }
 
+/** The reader's view, with what Claude Code says about the session right now. */
+function snap(r: SessionReader): SessionView {
+  const v = r.snapshot()
+  const l = live.get(v.id)
+  return l?.status === 'waiting' ? { ...v, waiting: { reason: l.waitingFor, since: l.since } } : v
+}
+
 function show(id: string) {
   const s = sessions.find((x) => x.id === id)
   if (!s) return
   try {
     reader = new SessionReader(s.id, s.file)
-    current = reader.snapshot()
+    current = snap(reader)
   } catch (e) {
     reader = undefined
     current = undefined
@@ -92,16 +111,49 @@ function accent(): Accent {
 
 function publish() {
   // The list shows the session on screen with its exact status, the rest by how recently they moved.
-  const list = sessions.map((s) => (current && s.id === current.id ? { ...s, title: current.title, status: current.status } : s))
+  const list = sessions.map((s) => (current && s.id === current.id ? { ...s, title: current.title, status: current.status, waiting: !!waitingText(current) } : s))
   const msg: ToWebview = { type: 'state', sessions: list.map(({ file: _f, ...s }) => s), current, following, folder, claudeDir, setup, accent: accent() }
   void panel?.webview.postMessage(msg)
   changed.fire()
   updateStatus()
+  announce()
+}
+
+/**
+ * Claude Code waiting for the user — a permission, a question, a plan to approve — is easy to miss while
+ * looking elsewhere: say so once per wait, with a way to get there (setting agentTrace.notifyWhenWaiting).
+ */
+function announce() {
+  if (!vscode.workspace.getConfiguration('agentTrace').get<boolean>('notifyWhenWaiting', true)) return
+  const text = waitingText(current)
+  const waits: { key: string; message: string }[] = []
+  if (current && text) waits.push({ key: `${current.id}:${current.waiting?.since ?? current.turn?.start}:${text}`, message: `Claude Code needs you: ${text}` })
+  for (const s of sessions)
+    if (s.waiting && s.id !== current?.id) waits.push({ key: `${s.id}:${live.get(s.id)?.since}`, message: `Claude Code needs you in “${s.title}”` })
+  for (const w of waits) {
+    if (announced.has(w.key)) continue
+    announced.add(w.key)
+    void vscode.window.showWarningMessage(w.message, 'Open Claude Code', 'Show flow').then(async (pick) => {
+      if (pick === 'Show flow') openFlow()
+      else if (pick === 'Open Claude Code') {
+        const commands = await vscode.commands.getCommands(true)
+        const focus = ['claude-vscode.focus', 'claude-vscode.sidebar.open', 'claude-vscode.editor.openLast'].find((c) => commands.includes(c))
+        if (focus) await vscode.commands.executeCommand(focus)
+      }
+    })
+  }
 }
 
 function updateStatus() {
   const v = current
   const running = v?.status === 'working'
+  const wait = waitingText(v)
+  status.backgroundColor = wait ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined
+  if (wait) {
+    status.text = `$(bell-dot) ${wait.length > 48 ? `${wait.slice(0, 47)}…` : wait}`
+    status.tooltip = `Claude Code is waiting for you — answer it in Claude Code. ${v?.title ?? ''}`
+    return
+  }
   if (!running) {
     status.text = '$(type-hierarchy) Agent Trace'
     status.tooltip = v ? `Claude Code is idle — ${v.title}` : 'Agent Trace: no Claude Code session in this folder yet'
@@ -193,13 +245,16 @@ class SessionsTree implements vscode.TreeDataProvider<SessionSummary> {
   getChildren() {
     return sessions
       .map((s) => (current && s.id === current.id ? { ...s, title: current.title, status: current.status } : s))
-      .filter((s) => s.status === 'working' || (current?.id === s.id && current.subagents.some((a) => a.status === 'running')))
+      .map((s) => (current && s.id === current.id ? { ...s, waiting: !!waitingText(current) } : s))
+      .filter((s) => s.waiting || s.status === 'working' || (current?.id === s.id && current.subagents.some((a) => a.status === 'running')))
   }
   getTreeItem(s: SessionSummary) {
     const item = new vscode.TreeItem(s.title)
     const onScreen = current?.id === s.id
-    item.description = `${s.status === 'working' ? 'working · ' : ''}${ago(s.last)}${onScreen ? (following ? ' · following' : ' · shown') : ''}`
-    item.iconPath = new vscode.ThemeIcon(s.status === 'working' ? 'sync~spin' : onScreen ? 'eye' : 'comment-discussion')
+    item.description = `${s.waiting ? 'needs you · ' : s.status === 'working' ? 'working · ' : ''}${ago(s.last)}${onScreen ? (following ? ' · following' : ' · shown') : ''}`
+    item.iconPath = s.waiting
+      ? new vscode.ThemeIcon('bell-dot', new vscode.ThemeColor('list.warningForeground'))
+      : new vscode.ThemeIcon(s.status === 'working' ? 'sync~spin' : onScreen ? 'eye' : 'comment-discussion')
     item.tooltip = `${s.title}\n${s.id}`
     item.command = { command: 'agentFlow.showSession', title: 'Show', arguments: [s.id] }
     return item
@@ -208,7 +263,8 @@ class SessionsTree implements vscode.TreeDataProvider<SessionSummary> {
 
 // ── the setup list ────────────────────────────────────────────────────────
 
-const GROUPS: [SetupKind, string, string][] = [
+type GroupKey = SetupKind | 'found'
+const GROUPS: [GroupKey, string, string][] = [
   ['memory', 'Memory (CLAUDE.md)', 'book'],
   ['agent', 'Agents', 'hubot'],
   ['command', 'Slash commands', 'terminal'],
@@ -217,31 +273,34 @@ const GROUPS: [SetupKind, string, string][] = [
   ['hook', 'Hooks', 'zap'],
   ['plugin', 'Plugins', 'extensions'],
   ['settings', 'Settings', 'gear'],
+  ['found', 'Here, not loaded', 'warning'],
 ]
 const scopeLabel = (i: SetupItem) => (i.scope === 'plugin' ? `plugin ${i.plugin}` : i.scope === 'builtin' ? 'built-in' : i.scope)
 
-type SetupNode = { group: SetupKind } | { item: SetupItem }
+type SetupNode = { group: GroupKey } | { item: SetupItem }
+/** Items not loaded go in their own group, out of their kind's. */
+const inGroup = (i: SetupItem, g: GroupKey) => (g === 'found' ? !!i.unloaded : i.kind === g && !i.unloaded)
 
 class SetupTree implements vscode.TreeDataProvider<SetupNode> {
   readonly onDidChangeTreeData = setupChanged.event
   getChildren(node?: SetupNode): SetupNode[] {
     const items = setup?.items ?? []
-    if (!node) return GROUPS.filter(([k]) => items.some((i) => i.kind === k)).map(([group]) => ({ group }))
-    if ('group' in node) return items.filter((i) => i.kind === node.group).map((item) => ({ item }))
+    if (!node) return GROUPS.filter(([k]) => items.some((i) => inGroup(i, k))).map(([group]) => ({ group }))
+    if ('group' in node) return items.filter((i) => inGroup(i, node.group)).map((item) => ({ item }))
     return []
   }
   getTreeItem(node: SetupNode) {
     if ('group' in node) {
       const [, label, icon] = GROUPS.find(([k]) => k === node.group)!
       const t = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed)
-      t.description = String(setup?.items.filter((i) => i.kind === node.group).length ?? 0)
+      t.description = String(setup?.items.filter((i) => inGroup(i, node.group)).length ?? 0)
       t.iconPath = new vscode.ThemeIcon(icon)
       return t
     }
     const i = node.item
     const t = new vscode.TreeItem(i.kind === 'command' ? `/${i.name}` : i.name)
     t.description = scopeLabel(i)
-    t.tooltip = [i.name, i.description, ...(i.facts ?? []), i.path].filter(Boolean).join('\n')
+    t.tooltip = [i.name, i.unloaded, i.description, ...(i.facts ?? []), i.path].filter(Boolean).join('\n')
     if (i.path) {
       t.resourceUri = vscode.Uri.file(i.path)
       t.command = { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.file(i.path)] }
@@ -282,22 +341,29 @@ export function activate(context: vscode.ExtensionContext) {
   publish()
 
   // The open session is read every ~0.7 s (only what was appended); the list every few seconds.
+  // Claude Code's own session files are read every tick too: a permission prompt writes nothing to the
+  // transcript, only "waiting" there.
   let ticks = 0
+  let liveKey = ''
   const timer = setInterval(() => {
+    live = liveSessions()
+    const nextLive = JSON.stringify([...live].map(([id, l]) => [id, l.status, l.waitingFor]))
+    const liveMoved = nextLive !== liveKey
+    liveKey = nextLive
     if (ticks % 8 === 7 && refreshSetup()) publish()
-    if (++ticks % 4 === 0) {
+    if (++ticks % 4 === 0 || liveMoved) {
       // A session that goes quiet changes status without a write: that counts too.
-      const key = () => `${current?.id}|${sessions.map((s) => `${s.id}:${s.last}:${s.status}`).join(',')}`
+      const key = () => `${current?.id}|${sessions.map((s) => `${s.id}:${s.last}:${s.status}:${s.waiting}`).join(',')}`
       const before = key()
       refreshSessions()
       if (before !== key()) publish()
     }
-    if (reader?.poll()) {
-      current = reader.snapshot()
+    if (reader?.poll() || (reader && liveMoved)) {
+      current = snap(reader)
       publish()
     } else if (current && current.status === 'working' && reader) {
       // Nothing new, but a long-silent turn may have gone stale.
-      const next = reader.snapshot()
+      const next = snap(reader)
       if (next.status !== current.status) {
         current = next
         publish()

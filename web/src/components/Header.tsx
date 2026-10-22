@@ -1,6 +1,7 @@
 import { ACCENTS, type Accent, type SessionSummary, type SessionView } from '../../../shared/model.ts'
 import { ago, duration } from '../context.ts'
 import { send } from '../vscode.ts'
+import { waitingText } from '../../../shared/waiting.ts'
 
 const ACCENT_NAMES: Record<Accent, string> = { vscode: 'VS Code theme', gold: 'Gold', claude: 'Terracotta', ocean: 'Ocean', teal: 'Teal', violet: 'Violet', rose: 'Rose' }
 
@@ -53,7 +54,7 @@ export function Header({
             <option value="__follow__">Follow the latest session</option>
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.status === 'working' ? '● ' : ''}
+                {s.waiting ? '🔔 ' : s.status === 'working' ? '● ' : ''}
                 {s.title} — {ago(s.last, now)}
               </option>
             ))}
@@ -63,9 +64,13 @@ export function Header({
       <div className="header-end">
         {view && (
           <div className="facts">
-            <span className={`pill${working ? ' busy' : ''}`}>
+            <span className={`pill${waitingText(view) ? ' waiting' : working ? ' busy' : ''}`} title={waitingText(view)}>
               <i />
-              {working ? `Working · ${duration(now - (view.turn?.start ?? now))}` : `Idle · ${ago(view.last, now)}`}
+              {waitingText(view)
+                ? `Needs you · ${duration(now - (view.waiting?.since ?? view.last))}`
+                : working
+                  ? `Working · ${duration(now - (view.turn?.start ?? now))}`
+                  : `Idle · ${ago(view.last, now)}`}
             </span>
             {view.title && (
               <span className="fact title" title={view.title}>
