@@ -53,7 +53,9 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.accent = accent
   }, [accent])
-  useEffect(() => setPicked(undefined), [state?.accent])
+  useEffect(() => {
+    setPicked(undefined)
+  }, [state?.accent])
 
   useEffect(() => {
     const onMessage = (e: MessageEvent<ToWebview>) => e.data?.type === 'state' && setState(e.data)
@@ -68,7 +70,9 @@ function App() {
 
   // Another session or a new turn: what was selected may be gone.
   const view = state?.current ?? (state?.folder ? NO_SESSION : undefined)
-  useEffect(() => select(null), [view?.id, view?.turn?.start])
+  useEffect(() => {
+    select(null)
+  }, [view?.id, view?.turn?.start])
   const setup = useMemo(() => (view ? buildSetup(view, state?.setup) : undefined), [view, state?.setup])
 
   return (

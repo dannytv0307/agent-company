@@ -197,7 +197,10 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
   const rows = group === 'memory' ? 0 : Math.min(items.length, SETUP_ROWS)
   // React Flow measures handles once; new rows need it to look again.
   const updateInternals = useUpdateNodeInternals()
-  useEffect(() => updateInternals(id), [rows, id, updateInternals])
+  // (In braces: what it returns must not be taken for a cleanup function.)
+  useEffect(() => {
+    updateInternals(id)
+  }, [rows, id, updateInternals])
   if (data.kind !== 'setup') return null
   const g = groupOf(data.group)
   const usedBy = (key: string) => setup.uses.get(key)
