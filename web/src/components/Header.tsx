@@ -1,91 +1,51 @@
-import type { Lang } from '../../../shared/types.ts'
-import { useT } from '../i18n.ts'
-import { useCompanyCtx } from '../context.ts'
-import { ProjectSwitcher } from './ProjectSwitcher.tsx'
-import { monogram } from './OrgChart.tsx'
+import type { SessionSummary, SessionView } from '../../../shared/model.ts'
+import { ago, duration } from '../context.ts'
+import { send } from '../vscode.ts'
 
-export type Theme = 'system' | 'light' | 'dark'
-
-const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' }
-const THEME_ICON: Record<Theme, string> = { system: '◐', light: '○', dark: '●' }
-
-interface Props {
-  lang: Lang
-  setLang: (l: Lang) => void
-  theme: Theme
-  setTheme: (t: Theme) => void
-  onActivity: () => void
-  onApprovals: () => void
-  onPlan: () => void
-  onConfigs: () => void
-  onOwner: () => void
-  view: 'org' | 'portfolio' | 'project'
-  setView: (v: 'org' | 'portfolio' | 'project') => void
-}
-
-export function Header({ lang, setLang, theme, setTheme, onActivity, onApprovals, onPlan, onConfigs, onOwner, view, setView }: Props) {
-  const { company } = useCompanyCtx()
-  const { t, l } = useT()
-  const working = Object.values(company.states).filter((s) => s.status === 'working').length
-  const status = !company.connected ? t('offlineServer') : working ? `${working} ${t('atWork')}` : t('allQuiet')
-
+/** The session on screen: which one, whether Claude is at work, and what it has cost so far. */
+export function Header({ view, sessions, following, now }: { view?: SessionView; sessions: SessionSummary[]; following: boolean; now: number }) {
+  const working = view?.status === 'working'
   return (
     <header className="header">
       <div className="brand">
-        <span className="wordmark">{l(company.org?.company.name)}</span>
-        <ProjectSwitcher />
-        <button className="progress-pill" onClick={onPlan} title={t('plan')}>
-          {company.progress.total ? (
-            <>
-              <span className="bar">
-                <i style={{ width: `${company.progress.pct}%` }} />
-              </span>
-              {company.progress.pct}% · {company.progress.done}/{company.progress.total}
-            </>
-          ) : (
-            t('noPlanShort')
-          )}
-        </button>
-        <button className={`pulse${company.connected ? (working || company.work.length ? ' busy' : '') : ' off'}`} onClick={onActivity} title={t('wkTitle')}>
-          <i />
-          {company.work.length ? `${company.work.length} ${t('wkRunningShort')}` : status}
-        </button>
+        <span className="wordmark">Agent Flow</span>
+        {sessions.length > 0 && (
+          <select
+            className="session-pick"
+            value={following ? '__follow__' : (view?.id ?? '')}
+            onChange={(e) => send(e.target.value === '__follow__' ? { type: 'follow' } : { type: 'select', id: e.target.value })}
+            aria-label="Session"
+          >
+            <option value="__follow__">Follow the latest session</option>
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.status === 'working' ? '● ' : ''}
+                {s.title} — {ago(s.last, now)}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
-      <nav className="actions">
-        <div className="views" role="tablist">
-          <button role="tab" aria-selected={view === 'org'} className={view === 'org' ? 'on' : ''} onClick={() => setView('org')}>
-            {t('viewBoard')}
-          </button>
-          <button role="tab" aria-selected={view !== 'org'} className={view !== 'org' ? 'on' : ''} onClick={() => setView('portfolio')}>
-            {t('viewAll')}
-          </button>
+      {view && (
+        <div className="facts">
+          <span className={`pill${working ? ' busy' : ''}`}>
+            <i />
+            {working ? `Working · ${duration(now - (view.turn?.start ?? now))}` : `Idle · ${ago(view.last, now)}`}
+          </span>
+          {view.title && <span className="fact title" title={view.title}>{view.title}</span>}
+          {view.branch && (
+            <span className="fact branch" title="Git branch">
+              ⎇ {view.branch}
+            </span>
+          )}
+          {typeof view.cost === 'number' && view.cost > 0 && <span className="fact" title="Session cost so far">${view.cost.toFixed(2)}</span>}
+          {(view.linesAdded || view.linesRemoved) ? (
+            <span className="fact lines" title="Lines changed this session">
+              <b className="add">+{view.linesAdded ?? 0}</b> <b className="del">−{view.linesRemoved ?? 0}</b>
+            </span>
+          ) : null}
         </div>
-        <span className="sep" />
-        {company.attention > 0 && (
-          <button className="link attention" onClick={onApprovals}>
-            {t('approvals')}
-            <span className="badge">{company.attention}</span>
-          </button>
-        )}
-        <button className="link" onClick={onActivity}>
-          {t('activity')}
-        </button>
-        <button className="link" onClick={onConfigs}>
-          {t('configs')}
-        </button>
-        <span className="sep" />
-        <button className="icon" onClick={() => setTheme(NEXT_THEME[theme])} title={`${t('theme')}: ${theme}`} aria-label={`${t('theme')}: ${theme}`}>
-          {THEME_ICON[theme]}
-        </button>
-        <button className="icon text" onClick={() => setLang(lang === 'en' ? 'ja' : 'en')} aria-label="Language">
-          {lang === 'en' ? '日本語' : 'EN'}
-        </button>
-        {company.org && (
-          <button className="icon owner-btn" onClick={onOwner} title={`${l(company.org.owner.name)} · ${t('owner')}`} aria-label={t('owner')}>
-            {monogram(l(company.org.owner.name))}
-          </button>
-        )}
-      </nav>
+      )}
     </header>
   )
 }

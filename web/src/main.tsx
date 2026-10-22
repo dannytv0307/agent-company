@@ -1,134 +1,81 @@
-import { StrictMode, useCallback, useEffect, useState } from 'react'
+import { StrictMode, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ReactFlowProvider } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './styles.css'
-import type { Lang } from '../../shared/types.ts'
-import { LangContext } from './i18n.ts'
-import { CompanyContext } from './context.ts'
-import { useCompany } from './store.ts'
-import { Header, type Theme } from './components/Header.tsx'
-import { OrgChart } from './components/OrgChart.tsx'
-import { ACTIVITY, APPROVALS, AgentPanel, PLAN } from './components/AgentPanel.tsx'
-import { ConfigModal } from './components/ConfigModal.tsx'
-import { ProjectsModal } from './components/ProjectsModal.tsx'
-import { Portfolio } from './components/Portfolio.tsx'
-import { ProjectPage } from './components/ProjectPage.tsx'
-import { ChatDock } from './components/ChatDock.tsx'
+import type { SessionView, ToWebview } from '../../shared/model.ts'
+import { FlowContext, type Selection } from './context.ts'
+import { Flow } from './components/Flow.tsx'
+import { Header } from './components/Header.tsx'
+import { Inspector } from './components/Inspector.tsx'
+import { buildSetup } from './setup.ts'
+import { send } from './vscode.ts'
 
-function load(key: string): string | null {
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
+type State = Extract<ToWebview, { type: 'state' }>
+
+// Follow VS Code's theme: the webview's body carries vscode-light / vscode-dark / vscode-high-contrast.
+function syncTheme() {
+  const light = document.body.classList.contains('vscode-light') || document.body.classList.contains('vscode-high-contrast-light')
+  document.documentElement.dataset.theme = light ? 'light' : 'dark'
+}
+syncTheme()
+new MutationObserver(syncTheme).observe(document.body, { attributes: true, attributeFilter: ['class'] })
+
+function Empty({ state }: { state?: State }) {
+  if (!state) return <div className="empty">Loading…</div>
+  return <div className="empty">Open a folder: Agent Flow shows the Claude Code sessions run in it.</div>
 }
 
-function save(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // storage unavailable — keep in memory only
-  }
-}
-
-const loadLang = (): Lang => (load('lang') === 'ja' ? 'ja' : 'en')
-const loadTheme = (): Theme => {
-  const t = load('theme')
-  return t === 'light' || t === 'dark' ? t : 'system'
+/** Before the folder's first session: the setup on its own, with Claude waiting. */
+const NO_SESSION: SessionView = {
+  id: '',
+  title: '',
+  status: 'idle',
+  last: 0,
+  turns: 0,
+  main: { id: 'main', kind: 'main', type: 'Claude', title: '', start: 0, status: 'done', steps: [] },
+  subagents: [],
+  files: [],
 }
 
 function App() {
-  const company = useCompany()
-  const [lang, setLangState] = useState<Lang>(loadLang)
-  const [theme, setThemeState] = useState<Theme>(loadTheme)
-  const [selected, select] = useState<string | null>(null)
-  const [configs, setConfigs] = useState(false)
-  const closeConfigs = useCallback(() => setConfigs(false), [])
-  const [projectsOpen, setProjectsOpen] = useState(false)
-  const [view, setView] = useState<'org' | 'portfolio' | 'project'>('org')
-  const [focus, setFocus] = useState(false)
-  const [typingAgent, setTypingAgent] = useState<string | null>(null)
-  const [typingCommand, setTypingCommand] = useState<string | null>(null)
-  const [prefill, setPrefill] = useState<{ text: string; n: number } | null>(null)
-  const fill = useCallback((text: string) => setPrefill((p) => ({ text, n: (p?.n ?? 0) + 1 })), [])
-  const closeProjects = useCallback(() => setProjectsOpen(false), [])
+  const [state, setState] = useState<State>()
+  const [selected, select] = useState<Selection | null>(null)
+  const [now, setNow] = useState(Date.now())
 
-  const setLang = (l: Lang) => {
-    setLangState(l)
-    save('lang', l)
-  }
-  const setTheme = (t: Theme) => {
-    setThemeState(t)
-    save('theme', t)
-  }
   useEffect(() => {
-    if (theme === 'system') delete document.documentElement.dataset.theme
-    else document.documentElement.dataset.theme = theme
-  }, [theme])
+    const onMessage = (e: MessageEvent<ToWebview>) => e.data?.type === 'state' && setState(e.data)
+    window.addEventListener('message', onMessage)
+    send({ type: 'ready' })
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      clearInterval(t)
+    }
+  }, [])
+
+  // Another session or a new turn: what was selected may be gone.
+  const view = state?.current ?? (state?.folder ? NO_SESSION : undefined)
+  useEffect(() => select(null), [view?.id, view?.turn?.start])
+  const setup = useMemo(() => (view ? buildSetup(view, state?.setup) : undefined), [view, state?.setup])
 
   return (
-    <LangContext.Provider value={lang}>
-      <CompanyContext.Provider
-        value={{ company, selected, select, openProjects: () => setProjectsOpen(true), focus, setFocus, typingAgent, setTypingAgent, typingCommand, setTypingCommand, prefill, fill }}
-      >
-        <div className="app" lang={lang}>
-          <Header
-            lang={lang}
-            setLang={setLang}
-            theme={theme}
-            setTheme={setTheme}
-            onActivity={() => select(selected === ACTIVITY ? null : ACTIVITY)}
-            onApprovals={() => select(selected === APPROVALS ? null : APPROVALS)}
-            onOwner={() => select(selected === company.org?.owner.id ? null : (company.org?.owner.id ?? null))}
-            onPlan={() => (view === 'project' ? undefined : select(selected === PLAN ? null : PLAN))}
-            view={view}
-            setView={(v) => {
-              select(null)
-              setView(v)
-            }}
-            onConfigs={() => setConfigs(true)}
-          />
-          {/* Chat | work area | side panel, side by side: opening a panel narrows the canvas instead of covering it. */}
-          <div className="body">
-            <ChatDock />
-            <div className="work">
-              <main className={`stage${Object.values(company.states).some((s) => s.status === 'working') ? ' busy' : ''}`}>
-                {view === 'org' && (
-                  <ReactFlowProvider>
-                    <OrgChart />
-                  </ReactFlowProvider>
-                )}
-                {view === 'portfolio' && (
-                  <Portfolio
-                    onOpen={(id) => {
-                      void company.selectProject(id)
-                      setView('project')
-                    }}
-                  />
-                )}
-                {view === 'project' && (
-                  <ProjectPage
-                    onBack={() => setView('portfolio')}
-                    onOrg={() => setView('org')}
-                  />
-                )}
-              </main>
-            </div>
-            <AgentPanel />
+    <div className="app">
+      <Header view={state?.current} sessions={state?.sessions ?? []} following={state?.following ?? true} now={now} />
+      {view && setup ? (
+        <FlowContext.Provider value={{ view, setup, now, selected, select }}>
+          <div className={`body${selected ? ' with-inspector' : ''}`}>
+            <ReactFlowProvider>
+              <Flow />
+            </ReactFlowProvider>
+            <Inspector />
           </div>
-          {configs && <ConfigModal onClose={closeConfigs} />}
-          {projectsOpen && <ProjectsModal onClose={closeProjects} />}
-        </div>
-      </CompanyContext.Provider>
-    </LangContext.Provider>
+        </FlowContext.Provider>
+      ) : (
+        <Empty state={state} />
+      )}
+    </div>
   )
-}
-
-// The side panel's and the chat's widths, as the owner last dragged them.
-for (const key of ['dock', 'chatDock']) {
-  const w = Number(load(key))
-  if (w >= 340) document.documentElement.style.setProperty(`--${key}`, `${w}px`)
 }
 
 createRoot(document.getElementById('root')!).render(

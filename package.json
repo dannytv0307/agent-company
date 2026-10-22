@@ -1,35 +1,63 @@
 {
-  "name": "agent-company",
+  "name": "agent-flow",
+  "displayName": "Agent Flow",
+  "description": "See what Claude Code is doing, live, against your setup: CLAUDE.md, agents, slash commands, skills, MCP servers, hooks and plugins, lit up as they are used.",
   "version": "0.1.0",
+  "publisher": "dannytv0307",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
-  "description": "Local control plane for your AI software company (Claude Code + Codex + Antigravity)",
-  "scripts": {
-    "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:start\" \"npm:dev:web\"",
-    "dev:watch": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "node --watch-path=server --watch-path=shared server/index.ts",
-    "dev:web": "vite",
-    "build": "vite build",
-    "start": "node server/index.ts",
-    "typecheck": "tsc --noEmit"
+  "repository": { "type": "git", "url": "https://github.com/dannytv0307/agent-company.git" },
+  "icon": "media/icon.png",
+  "engines": { "vscode": "^1.100.0" },
+  "categories": ["AI", "Visualization", "Other"],
+  "main": "./out/extension.cjs",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "agentFlow.open", "title": "Open Flow", "category": "Agent Flow", "icon": "$(type-hierarchy)" },
+      { "command": "agentFlow.follow", "title": "Follow the Latest Session", "category": "Agent Flow", "icon": "$(pin)" },
+      { "command": "agentFlow.showSession", "title": "Show Session", "category": "Agent Flow" }
+    ],
+    "viewsContainers": {
+      "activitybar": [{ "id": "agentFlow", "title": "Agent Flow", "icon": "media/activity.svg" }]
+    },
+    "views": {
+      "agentFlow": [
+        { "id": "agentFlow.sessions", "name": "Claude Code Sessions" },
+        { "id": "agentFlow.setup", "name": "Setup (.claude)" }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "agentFlow.sessions",
+        "contents": "No Claude Code sessions in this folder yet.\nStart Claude Code here (extension or terminal) and its work shows up live.\n[Open Flow](command:agentFlow.open)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "agentFlow.open", "when": "view == agentFlow.sessions", "group": "navigation" },
+        { "command": "agentFlow.follow", "when": "view == agentFlow.sessions", "group": "navigation" }
+      ],
+      "commandPalette": [{ "command": "agentFlow.showSession", "when": "false" }]
+    }
   },
-  "dependencies": {
-    "@hono/node-server": "^2.1.5",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "@xyflow/react": "^12.12.0",
-    "hono": "^4.13.13",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "yaml": "^2.9.1",
-    "zod": "^4.6.7"
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "package": "npm run build && npx --yes @vscode/vsce@3 package --no-dependencies --skip-license --out agent-flow.vsix",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p src",
+    "dev:web": "vite"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/vscode": "1.100.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "concurrently": "^10.0.6",
-    "tsx": "^4.23.15",
+    "@xyflow/react": "^12.12.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }

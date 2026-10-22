@@ -1,12 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// The webview's UI. Relative asset paths: the extension turns them into webview URIs.
 export default defineConfig({
   root: 'web',
+  base: './',
   plugins: [react()],
-  build: { outDir: '../dist', emptyOutDir: true },
-  server: {
-    port: 5317,
-    proxy: { '/api': { target: 'http://127.0.0.1:4317', changeOrigin: true } },
-  },
+  build: { outDir: '../out/webview', emptyOutDir: true },
 })

@@ -1,11 +1,8 @@
 node_modules/
-dist/
-data/
-workspace/
+# Built by npm run build / npm run package
+out/
+*.vsix
 .playwright-mcp/
-
-# The owner's own company (names, project folders). A fresh clone starts from templates/blank-company.yaml.
-org.yaml
 
 .env
 .env.*
