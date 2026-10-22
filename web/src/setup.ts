@@ -24,6 +24,8 @@ export interface Use {
 export interface SetupModel {
   items: SetupItem[]
   uses: Map<string, Use[]>
+  /** The other way round: for a flow node, the setup items it runs on (its agent definition, its command…). */
+  byNode: Map<string, SetupItem[]>
 }
 
 export const keyOf = (i: SetupItem) => `${i.kind}|${i.scope}|${i.plugin ?? ''}|${i.name}|${i.path ?? ''}`
@@ -115,10 +117,19 @@ export function buildSetup(view: SessionView, setup: Setup | undefined): SetupMo
     }
   }
 
+  const byNode = new Map<string, SetupItem[]>()
+  for (const i of items) for (const u of uses.get(keyOf(i)) ?? []) if (u.node && i.kind !== 'memory') byNode.set(u.node, [...(byNode.get(u.node) ?? []), i])
+
   // A plugin is in use when anything it brings is.
   for (const p of items.filter((i) => i.kind === 'plugin')) {
     const from = items.filter((i) => i.plugin === p.name && uses.has(keyOf(i)))
     for (const i of from) use(p, { node: '', live: !!uses.get(keyOf(i))?.some((u) => u.live), why: `${groupOf(i.kind).title.replace(/s$/, '')} ${displayName(i)}` })
   }
-  return { items, uses }
+  return { items, uses, byNode }
+}
+
+/** "project agent", "user skill", "built-in command", "remotion skill"… */
+export function originOf(i: SetupItem): string {
+  const what = i.kind === 'agent' ? 'agent' : i.kind === 'command' ? 'command' : i.kind === 'skill' ? 'skill' : i.kind
+  return `${scopeLabel(i)} ${what}`
 }

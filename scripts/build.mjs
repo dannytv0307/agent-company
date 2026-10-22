@@ -19,4 +19,4 @@ await build({
   external: ['vscode'],
   logLevel: 'info',
 })
-console.log('Agent Flow built in out/')
+console.log('Agent Trace built in out/')

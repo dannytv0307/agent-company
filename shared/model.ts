@@ -124,9 +124,13 @@ export interface Setup {
   items: SetupItem[]
 }
 
+/** The colour that marks work in progress, everywhere in the flow (setting agentTrace.accentColor). */
+export const ACCENTS = ['vscode', 'gold', 'claude', 'ocean', 'teal', 'violet', 'rose'] as const
+export type Accent = (typeof ACCENTS)[number]
+
 /** Extension → webview. */
 export type ToWebview =
-  | { type: 'state'; sessions: SessionSummary[]; current?: SessionView; following: boolean; folder?: string; claudeDir?: string; setup?: Setup }
+  | { type: 'state'; sessions: SessionSummary[]; current?: SessionView; following: boolean; folder?: string; claudeDir?: string; setup?: Setup; accent?: Accent }
 
 /** Webview → extension. */
 export type FromWebview =
@@ -135,3 +139,4 @@ export type FromWebview =
   | { type: 'diff'; path: string }
   | { type: 'select'; id: string }
   | { type: 'follow' }
+  | { type: 'accent'; accent: Accent }

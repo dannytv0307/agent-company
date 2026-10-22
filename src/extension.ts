@@ -1,11 +1,11 @@
-// Agent Flow: shows what Claude Code is doing in this folder, live. It reads Claude Code's own session
+// Agent Trace: shows what Claude Code is doing in this folder, live. It reads Claude Code's own session
 // transcripts — nothing to configure, nothing sent anywhere — and draws the current turn in an editor
 // tab: the prompt, the main agent, the subagents it spawns, each tool call, the files it touches and
 // what comes out. A sidebar lists the folder's sessions; the status bar says what is running now.
 import * as vscode from 'vscode'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import type { FromWebview, SessionSummary, SessionView, Setup, SetupItem, SetupKind, ToWebview } from '../shared/model.ts'
+import { ACCENTS, type Accent, type FromWebview, type SessionSummary, type SessionView, type Setup, type SetupItem, type SetupKind, type ToWebview } from '../shared/model.ts'
 import { listSessions, projectDirFor, SessionReader } from './claude.ts'
 import { readSetup } from './setup.ts'
 
@@ -77,17 +77,23 @@ function show(id: string) {
   } catch (e) {
     reader = undefined
     current = undefined
-    void vscode.window.showWarningMessage(`Agent Flow could not read session ${id}: ${e instanceof Error ? e.message : String(e)}`)
+    void vscode.window.showWarningMessage(`Agent Trace could not read session ${id}: ${e instanceof Error ? e.message : String(e)}`)
   }
   publish()
 }
 
 // ── telling everyone ──────────────────────────────────────────────────────
 
+/** The colour picked in the settings (or in the flow's header). */
+function accent(): Accent {
+  const a = vscode.workspace.getConfiguration('agentTrace').get<string>('accentColor')
+  return (ACCENTS as readonly string[]).includes(a ?? '') ? (a as Accent) : 'vscode'
+}
+
 function publish() {
   // The list shows the session on screen with its exact status, the rest by how recently they moved.
   const list = sessions.map((s) => (current && s.id === current.id ? { ...s, title: current.title, status: current.status } : s))
-  const msg: ToWebview = { type: 'state', sessions: list.map(({ file: _f, ...s }) => s), current, following, folder, claudeDir, setup }
+  const msg: ToWebview = { type: 'state', sessions: list.map(({ file: _f, ...s }) => s), current, following, folder, claudeDir, setup, accent: accent() }
   void panel?.webview.postMessage(msg)
   changed.fire()
   updateStatus()
@@ -97,8 +103,8 @@ function updateStatus() {
   const v = current
   const running = v?.status === 'working'
   if (!running) {
-    status.text = '$(type-hierarchy) Agent Flow'
-    status.tooltip = v ? `Claude Code is idle — ${v.title}` : 'Agent Flow: no Claude Code session in this folder yet'
+    status.text = '$(type-hierarchy) Agent Trace'
+    status.tooltip = v ? `Claude Code is idle — ${v.title}` : 'Agent Trace: no Claude Code session in this folder yet'
     return
   }
   const step = [...v.main.steps].reverse().find((s) => s.status === 'running')
@@ -130,7 +136,7 @@ function openFlow() {
     panel.reveal()
     return
   }
-  panel = vscode.window.createWebviewPanel('agentFlow.flow', 'Agent Flow', vscode.ViewColumn.Active, {
+  panel = vscode.window.createWebviewPanel('agentFlow.flow', 'Agent Trace', vscode.ViewColumn.Active, {
     enableScripts: true,
     retainContextWhenHidden: true,
     localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, 'out', 'webview')],
@@ -160,6 +166,9 @@ async function onMessage(m: FromWebview) {
       following = false
       show(m.id)
       return
+    case 'accent':
+      await vscode.workspace.getConfiguration('agentTrace').update('accentColor', m.accent, vscode.ConfigurationTarget.Global)
+      return
     case 'follow':
       following = true
       refreshSessions()
@@ -180,8 +189,11 @@ const ago = (ts: number) => {
 
 class SessionsTree implements vscode.TreeDataProvider<SessionSummary> {
   readonly onDidChangeTreeData = changed.event
+  /** Only sessions at work: Claude mid-turn, or subagents still running in the background. */
   getChildren() {
-    return sessions.map((s) => (current && s.id === current.id ? { ...s, title: current.title, status: current.status } : s))
+    return sessions
+      .map((s) => (current && s.id === current.id ? { ...s, title: current.title, status: current.status } : s))
+      .filter((s) => s.status === 'working' || (current?.id === s.id && current.subagents.some((a) => a.status === 'running')))
   }
   getTreeItem(s: SessionSummary) {
     const item = new vscode.TreeItem(s.title)
@@ -274,9 +286,11 @@ export function activate(context: vscode.ExtensionContext) {
   const timer = setInterval(() => {
     if (ticks % 8 === 7 && refreshSetup()) publish()
     if (++ticks % 4 === 0) {
-      const before = `${current?.id}|${sessions.map((s) => `${s.id}:${s.last}`).join(',')}`
+      // A session that goes quiet changes status without a write: that counts too.
+      const key = () => `${current?.id}|${sessions.map((s) => `${s.id}:${s.last}:${s.status}`).join(',')}`
+      const before = key()
       refreshSessions()
-      if (before !== `${current?.id}|${sessions.map((s) => `${s.id}:${s.last}`).join(',')}`) publish()
+      if (before !== key()) publish()
     }
     if (reader?.poll()) {
       current = reader.snapshot()
@@ -302,6 +316,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('agentFlow.showSession', (id: string) => {
       void onMessage({ type: 'select', id })
       openFlow()
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('agentTrace.accentColor')) publish()
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       refreshSessions()

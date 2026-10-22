@@ -1,50 +1,144 @@
 {
-  "name": "agent-flow",
-  "displayName": "Agent Flow",
+  "name": "agent-trace",
+  "displayName": "Agent Trace",
   "description": "See what Claude Code is doing, live, against your setup: CLAUDE.md, agents, slash commands, skills, MCP servers, hooks and plugins, lit up as they are used.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "dannytv0307",
-  "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
-  "repository": { "type": "git", "url": "https://github.com/dannytv0307/agent-company.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dannytv0307/agent-company.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dannytv0307/agent-company/issues"
+  },
+  "homepage": "https://github.com/dannytv0307/agent-company#readme",
   "icon": "media/icon.png",
-  "engines": { "vscode": "^1.100.0" },
-  "categories": ["AI", "Visualization", "Other"],
+  "galleryBanner": {
+    "color": "#0d0c0b",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "agents",
+    "subagents",
+    "mcp",
+    "visualization",
+    "workflow"
+  ],
   "main": "./out/extension.cjs",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
-      { "command": "agentFlow.open", "title": "Open Flow", "category": "Agent Flow", "icon": "$(type-hierarchy)" },
-      { "command": "agentFlow.follow", "title": "Follow the Latest Session", "category": "Agent Flow", "icon": "$(pin)" },
-      { "command": "agentFlow.showSession", "title": "Show Session", "category": "Agent Flow" }
+      {
+        "command": "agentFlow.open",
+        "title": "Open Flow",
+        "category": "Agent Trace",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "agentFlow.follow",
+        "title": "Follow the Latest Session",
+        "category": "Agent Trace",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "agentFlow.showSession",
+        "title": "Show Session",
+        "category": "Agent Trace"
+      }
     ],
+    "configuration": {
+      "title": "Agent Trace",
+      "properties": {
+        "agentTrace.accentColor": {
+          "type": "string",
+          "default": "vscode",
+          "enum": [
+            "vscode",
+            "gold",
+            "claude",
+            "ocean",
+            "teal",
+            "violet",
+            "rose"
+          ],
+          "enumDescriptions": [
+            "The accent of your VS Code theme",
+            "Warm gold",
+            "Claude’s terracotta",
+            "Ocean blue",
+            "Teal",
+            "Violet",
+            "Rose"
+          ],
+          "description": "The colour that marks work in progress in the flow."
+        }
+      }
+    },
     "viewsContainers": {
-      "activitybar": [{ "id": "agentFlow", "title": "Agent Flow", "icon": "media/activity.svg" }]
+      "activitybar": [
+        {
+          "id": "agentFlow",
+          "title": "Agent Trace",
+          "icon": "media/activity.svg"
+        }
+      ]
     },
     "views": {
       "agentFlow": [
-        { "id": "agentFlow.sessions", "name": "Claude Code Sessions" },
-        { "id": "agentFlow.setup", "name": "Setup (.claude)" }
+        {
+          "id": "agentFlow.sessions",
+          "name": "Active Sessions"
+        },
+        {
+          "id": "agentFlow.setup",
+          "name": "Setup (.claude)"
+        }
       ]
     },
     "viewsWelcome": [
       {
         "view": "agentFlow.sessions",
-        "contents": "No Claude Code sessions in this folder yet.\nStart Claude Code here (extension or terminal) and its work shows up live.\n[Open Flow](command:agentFlow.open)"
+        "contents": "No Claude Code session is at work in this folder right now.\nStart one here (extension or terminal) and it shows up while it runs. Earlier sessions are in the session list of the Flow tab.\n[Open Flow](command:agentFlow.open)"
       }
     ],
     "menus": {
       "view/title": [
-        { "command": "agentFlow.open", "when": "view == agentFlow.sessions", "group": "navigation" },
-        { "command": "agentFlow.follow", "when": "view == agentFlow.sessions", "group": "navigation" }
+        {
+          "command": "agentFlow.open",
+          "when": "view == agentFlow.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "agentFlow.follow",
+          "when": "view == agentFlow.sessions",
+          "group": "navigation"
+        }
       ],
-      "commandPalette": [{ "command": "agentFlow.showSession", "when": "false" }]
+      "commandPalette": [
+        {
+          "command": "agentFlow.showSession",
+          "when": "false"
+        }
+      ]
     }
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "package": "npm run build && npx --yes @vscode/vsce@3 package --no-dependencies --skip-license --out agent-flow.vsix",
+    "package": "npm run build && npx --yes @vscode/vsce@3 package --no-dependencies --out agent-trace.vsix",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p src",
     "dev:web": "vite"
   },

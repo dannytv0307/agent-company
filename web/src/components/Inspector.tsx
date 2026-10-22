@@ -91,6 +91,39 @@ function AgentDetails({ a }: { a: Agent }) {
   )
 }
 
+/** What an agent handed back: its reply or report, and the files it wrote — nothing about how. */
+function OutputDetails({ a }: { a: Agent }) {
+  const { view } = useFlow()
+  const main = a.kind === 'main'
+  const files = view.files.filter((f) => f.writes > 0 && f.by.includes(a.id)).sort((x, y) => y.last - x.last)
+  return (
+    <>
+      <h2>{main ? 'Reply' : `${a.type} report`}</h2>
+      <div className={`status-line st-${a.status}`}>
+        <span className="dot" />
+        {a.status === 'error' ? 'Stopped' : 'Done'}
+        {a.end ? ` · ${ago(a.end)}` : ''}
+      </div>
+      {!main && a.title && <p className="lead">{a.title}</p>}
+      <pre className="code reply">{a.output ?? '—'}</pre>
+      {files.length > 0 && (
+        <>
+          <h3>Files changed · {files.length}</h3>
+          <ul className="file-list">
+            {files.map((f) => (
+              <li key={f.path}>
+                <button className="file-link" onClick={() => send({ type: 'diff', path: f.path })} title="Open the change">
+                  {shortPath(f.path, view.cwd)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  )
+}
+
 /** The flow node a setup item is used by, as a selection. */
 function selectionFor(node: string): Selection | null {
   if (node === 'command') return { kind: 'prompt' }
@@ -211,9 +244,12 @@ export function Inspector() {
         <pre className="code">{t?.prompt ?? '—'}</pre>
       </>
     )
-  } else if (selected.kind === 'agent' || selected.kind === 'output') {
-    const a = agentOf(view, selected.kind === 'agent' ? selected.id : selected.of)
+  } else if (selected.kind === 'agent') {
+    const a = agentOf(view, selected.id)
     body = a ? <AgentDetails a={a} /> : null
+  } else if (selected.kind === 'output') {
+    const a = agentOf(view, selected.of)
+    body = a ? <OutputDetails a={a} /> : null
   } else if (selected.kind === 'step') {
     const hit = stepOf(view, selected.id)
     body = hit ? <StepDetails step={hit.step} agent={hit.agent} /> : null
