@@ -26,6 +26,8 @@ export interface Live {
   status: 'busy' | 'idle' | 'waiting' | string
   waitingFor?: string
   since: number
+  /** When the Claude Code process running the session started. */
+  startedAt?: number
 }
 
 const alive = (pid: number) => {
@@ -59,7 +61,12 @@ export function liveSessions(): Map<string, Live> {
     }
     if (typeof j?.sessionId !== 'string' || typeof j.status !== 'string') continue
     if (typeof j.pid === 'number' && !alive(j.pid)) continue
-    out.set(j.sessionId, { status: j.status, waitingFor: typeof j.waitingFor === 'string' ? j.waitingFor : undefined, since: Number(j.statusUpdatedAt) || Date.now() })
+    out.set(j.sessionId, {
+      status: j.status,
+      waitingFor: typeof j.waitingFor === 'string' ? j.waitingFor : undefined,
+      since: Number(j.statusUpdatedAt) || Date.now(),
+      startedAt: Number(j.startedAt) || undefined,
+    })
   }
   return out
 }
@@ -246,6 +253,8 @@ function newAgent(id: string, kind: Agent['kind'], type: string, title: string, 
 }
 
 const STEP_LIMIT = 80
+/** Finished background subagents of earlier turns kept on the canvas. */
+const EARLIER_KEPT = 6
 
 /** One session: the main transcript plus its subagents' transcripts, folded into a SessionView. */
 export class SessionReader {
@@ -295,10 +304,20 @@ export class SessionReader {
     return changed
   }
 
-  snapshot(now = Date.now()): SessionView {
+  /**
+   * The view as of now. `processStart`: when the Claude Code process now running the session started —
+   * a subagent still "running" but quiet since before then belonged to a process that has ended, and
+   * will never report back.
+   */
+  snapshot(now = Date.now(), processStart?: number): SessionView {
     const v = this.view
     const working = !!v.turn && !v.turn.end && now - v.last < 10 * 60_000
-    return { ...v, status: working ? 'working' : 'idle', main: { ...v.main, steps: v.main.steps.slice(-STEP_LIMIT) } }
+    const subagents = v.subagents.map((a) =>
+      processStart && a.status === 'running' && (a.last ?? a.start) < processStart - 2000
+        ? { ...a, status: 'error' as const, end: a.last ?? a.start, output: a.output ?? 'Stopped: the Claude Code process that ran it has ended, so it never finished.' }
+        : a,
+    )
+    return { ...v, status: working ? 'working' : 'idle', main: { ...v.main, steps: v.main.steps.slice(-STEP_LIMIT) }, subagents }
   }
 
   // Newer Claude Code versions write each subagent to <session>/subagents/*.jsonl.
@@ -319,7 +338,7 @@ export class SessionReader {
       }
       if (sub.ignored) continue
       // Beside each transcript, a .meta.json names the Agent call that spawned it.
-      const meta = sub.agent ? undefined : readMeta(file)
+      const meta = !sub.agent || sub.agent.status === 'running' ? readMeta(file) : undefined
       if (!sub.agent && meta?.toolUseId) sub.agent = this.byCall.get(meta.toolUseId)
       const lines = sub.tail.read()
       for (const line of lines) {
@@ -341,6 +360,11 @@ export class SessionReader {
       }
       for (const e of sub.pending) this.apply(e, sub.agent)
       sub.pending = []
+      if (meta?.finished && sub.agent.status === 'running') {
+        sub.agent.status = 'done'
+        sub.agent.end = sub.agent.last ?? Date.now()
+        this.dirty = true
+      }
     }
   }
 
@@ -369,6 +393,7 @@ export class SessionReader {
       if (e.version) v.version = e.version
     }
     const at = Number.isFinite(ts) ? ts : v.last
+    if (owner && Number.isFinite(ts)) owner.last = Math.max(owner.last ?? 0, ts)
 
     switch (e.type) {
       case 'ai-title':
@@ -395,9 +420,32 @@ export class SessionReader {
         this.onAssistant(e, owner, at)
         return
       case 'attachment':
-        if (!owner) this.onListing(e.attachment)
+        if (owner) return
+        // Background subagents report back as a queued command.
+        if (e.attachment?.type === 'queued_command' && typeof e.attachment.prompt === 'string') this.onTaskNotification(e.attachment.prompt, at)
+        else this.onListing(e.attachment)
+        return
+      case 'queue-operation':
+        // …queued the moment they finish.
+        if (!owner && e.operation === 'enqueue' && typeof e.content === 'string') this.onTaskNotification(e.content, at)
         return
     }
+  }
+
+  /** A background subagent reporting back: <task-notification> with its call, status and result. True if it was one. */
+  private onTaskNotification(text: string, at: number): boolean {
+    const note = text.match(/<task-notification>[\s\S]*?<\/task-notification>/)?.[0]
+    if (!note) return false
+    const call = note.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]
+    const sub = call ? this.byCall.get(call.trim()) : undefined
+    if (sub && sub.status === 'running') {
+      const failed = /<status>(failed|error|killed|stopped)/i.test(note)
+      sub.end = at
+      sub.status = failed ? 'error' : 'done'
+      sub.output = trimText((note.match(/<result>([\s\S]*?)<\/result>/)?.[1] ?? note.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] ?? '').trim(), 8000)
+      this.dirty = true
+    }
+    return true
   }
 
   /**
@@ -496,21 +544,9 @@ export class SessionReader {
     }
     if (owner) return
 
-    // A background subagent reporting back to the main agent.
+    // A background subagent reporting back to the main agent (older versions: as a user message).
     const text = textOf(content)
-    const note = text.match(/<task-notification>[\s\S]*?<\/task-notification>/)?.[0]
-    if (note) {
-      const call = note.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]
-      const sub = call ? this.byCall.get(call.trim()) : undefined
-      if (sub && sub.status === 'running') {
-        const failed = /<status>(failed|error|killed|stopped)/i.test(note)
-        sub.end = at
-        sub.status = failed ? 'error' : 'done'
-        sub.output = trimText((note.match(/<result>([\s\S]*?)<\/result>/)?.[1] ?? note.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] ?? '').trim(), 8000)
-        this.dirty = true
-      }
-      return
-    }
+    if (this.onTaskNotification(text, at)) return
 
     // Stopped with Esc: the turn ends where it was.
     if (text.trim().startsWith('[Request interrupted') && v.turn && !v.turn.end) {
@@ -525,11 +561,15 @@ export class SessionReader {
 
     const p = promptOf(e)
     if (!p) return
-    // A new turn: the canvas starts over, keeping only subagents still at work in the background.
+    // A new turn: the canvas starts over. Subagents still at work stay, and so do background ones — like
+    // Claude Code's agent map, which lists them for the whole session (the latest few).
     v.turn = { prompt: p.prompt, command: p.command, start: at }
     v.turns++
     v.main = { ...newAgent('main', 'main', 'Claude', p.prompt, at), model: v.main.model, prompt: p.prompt }
-    v.subagents = v.subagents.filter((a) => a.status === 'running')
+    const kept = v.subagents.filter((a) => a.status === 'running' || a.background)
+    const finished = kept.filter((a) => a.status !== 'running').slice(-EARLIER_KEPT)
+    v.subagents = kept.filter((a) => a.status === 'running' || finished.includes(a))
+    for (const a of v.subagents) a.earlier = true
     v.files = []
     for (const [id, s] of this.steps) if (s.owner.kind === 'main') this.steps.delete(id)
     this.dirty = true

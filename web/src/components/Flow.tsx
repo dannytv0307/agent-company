@@ -86,7 +86,7 @@ function AgentNode({ data, id }: NodeProps<FlowNode>) {
   const step = [...a.steps].reverse().find((s) => s.status === 'running')
   const wait = waitingText(view)
   const asking = !!wait && pendingStep(view)?.agent.id === a.id
-  const doing = asking ? `Waiting for you: ${wait}` : main && !view.turn ? 'Waiting for a prompt' : running ? (step ? `${step.tool} ${step.label}` : main ? (a.said ? 'Writing…' : 'Thinking…') : 'Starting…') : a.status === 'error' ? (main ? 'Stopped' : 'Failed') : 'Done'
+  const doing = asking ? `Waiting for you: ${wait}` : main && !view.turn ? 'Waiting for a prompt' : running ? (step ? `${step.tool} ${step.label}` : main ? (a.said ? 'Writing…' : 'Thinking…') : a.steps.length ? 'Working…' : 'Starting…') : a.status === 'error' ? (main ? 'Stopped' : 'Failed') : 'Done'
   const elapsed = (a.end ?? (running ? now : a.start)) - a.start
   const def = setup.byNode.get(id)?.find((i) => i.kind === 'agent')
   return (
@@ -111,6 +111,7 @@ function AgentNode({ data, id }: NodeProps<FlowNode>) {
           </span>
         )}
         {!main && a.background && <span className="tag">background</span>}
+        {!main && a.earlier && <span className="tag" title="Launched in an earlier turn">earlier</span>}
         <span>
           {a.steps.length} tool{a.steps.length === 1 ? '' : 's'} · {duration(elapsed)}
         </span>

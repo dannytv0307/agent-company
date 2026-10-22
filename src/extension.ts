@@ -82,8 +82,8 @@ function refreshSetup(): boolean {
 
 /** The reader's view, with what Claude Code says about the session right now. */
 function snap(r: SessionReader): SessionView {
-  const v = r.snapshot()
-  const l = live.get(v.id)
+  const l = live.get(r.id)
+  const v = r.snapshot(Date.now(), l?.startedAt)
   return l?.status === 'waiting' ? { ...v, waiting: { reason: l.waitingFor, since: l.since } } : v
 }
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+Subagents now match Claude Code's own agent map:
+- **Background subagents are marked finished.** Newer Claude Code versions report completion as queued commands, which Agent Trace now reads.
+- **Background subagents of earlier turns stay on the canvas**, marked *earlier*: all running ones, plus the latest finished ones.
+- **A subagent left behind by an ended Claude Code process is marked stopped.** For example, after a restart such a subagent shows as stopped instead of running forever.
+- **Subagent files are trusted on completion:** when a subagent's own file says it finished, it counts as done even without a notification.
+
 ## 0.3.0
 
 - **Claude needs you:** when Claude Code waits for you, Agent Trace says so and names what it waits for: a permission to run a tool, a question, a plan to approve, a dialog. The signal comes from Claude Code's own session status. It shows in four places:

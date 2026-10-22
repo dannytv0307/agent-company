@@ -36,6 +36,10 @@ export interface Agent {
   status: StepStatus
   /** Runs in the background: the main agent went on without waiting. */
   background?: boolean
+  /** Launched in an earlier turn (a background subagent, still shown). */
+  earlier?: boolean
+  /** Its transcript's latest line. */
+  last?: number
   /** Tool calls of the current turn, oldest first. */
   steps: Step[]
   /** Its latest words (thinking out loud between tools). */
