@@ -236,13 +236,26 @@ export function readSetup(folder: string): Setup {
 
   // ── MCP servers: the folder's .mcp.json, ~/.claude.json (user-wide and for this folder) ──
   const mcpJson = path.join(folder, '.mcp.json')
-  mcpServers(readJson(mcpJson)?.mcpServers, project, mcpJson, items)
   const g = globalConfig()
+  const here = (g.json && (Object.entries(g.json.projects ?? {}).find(([p]) => samePath(p, folder))?.[1] as any)) || {}
+  const first = items.length
+  mcpServers(readJson(mcpJson)?.mcpServers, project, mcpJson, items)
+  // The folder's .mcp.json servers start only once approved (here, or for all of them in the settings),
+  // and any server can be turned off for this folder with /mcp.
+  const listed = (k: string) => [here[k], ...settings.map(([f]) => readJson(f)?.[k])].flatMap((v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []))
+  const allProject = here.enableAllProjectMcpServers === true || settings.some(([f]) => readJson(f)?.enableAllProjectMcpServers === true)
+  const approved = new Set(listed('enabledMcpjsonServers'))
+  const refused = new Set(listed('disabledMcpjsonServers'))
+  for (const i of items.slice(first)) {
+    if (refused.has(i.name)) Object.assign(i, { status: 'disabled', error: 'Turned down for this folder: Claude Code does not start it here.' })
+    else if (!allProject && !approved.has(i.name)) Object.assign(i, { status: 'approval', error: 'Claude Code asks you when it starts in this folder.' })
+  }
   if (g.json) {
     mcpServers(g.json.mcpServers, user, g.file, items)
-    const here = Object.entries(g.json.projects ?? {}).find(([p]) => samePath(p, folder))?.[1] as any
-    mcpServers(here?.mcpServers, local, g.file, items)
+    mcpServers(here.mcpServers, local, g.file, items)
   }
+  const off = new Set(Array.isArray(here.disabledMcpServers) ? here.disabledMcpServers.filter((x: unknown) => typeof x === 'string') : [])
+  for (const i of items.slice(first)) if (off.has(i.name)) Object.assign(i, { status: 'disabled', error: 'Turned off for this folder (with /mcp).' })
 
   // ── enabled plugins and what they bring ──
   const installed = readJson(path.join(home, 'plugins', 'installed_plugins.json'))?.plugins ?? {}

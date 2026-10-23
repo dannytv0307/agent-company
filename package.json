@@ -1,8 +1,8 @@
 {
   "name": "agent-trace",
   "displayName": "Agent Trace",
-  "description": "See what Claude Code is doing, live, against your setup: CLAUDE.md, agents, slash commands, skills, MCP servers, hooks and plugins, lit up as they are used.",
-  "version": "0.3.1",
+  "description": "Chat with your own Claude Code and Codex, one or both, and watch them work live: agents, subagents and tool calls drawn as a flow against the setup each loaded (the Claude factory and the Codex factory). Let them hand tasks to each other, and answer permissions right on the flow.",
+  "version": "0.4.0",
   "publisher": "dannytv0307",
   "license": "MIT",
   "type": "module",
@@ -30,39 +30,59 @@
   "keywords": [
     "claude",
     "claude code",
+    "codex",
+    "openai",
     "agents",
     "subagents",
+    "chat",
     "mcp",
     "visualization",
     "workflow"
   ],
   "main": "./out/extension.cjs",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:agentFlow.flow"
   ],
   "contributes": {
     "commands": [
       {
         "command": "agentFlow.open",
-        "title": "Open Flow",
+        "title": "Open",
         "category": "Agent Trace",
         "icon": "$(type-hierarchy)"
       },
       {
-        "command": "agentFlow.follow",
-        "title": "Follow the Latest Session",
+        "command": "agentFlow.newChat",
+        "title": "New Chat",
         "category": "Agent Trace",
-        "icon": "$(pin)"
+        "icon": "$(add)"
       },
       {
         "command": "agentFlow.showSession",
-        "title": "Show Session",
+        "title": "Open Session",
         "category": "Agent Trace"
+      },
+      {
+        "command": "agentFlow.deleteSession",
+        "title": "Delete Session",
+        "category": "Agent Trace",
+        "icon": "$(trash)"
       }
     ],
     "configuration": {
       "title": "Agent Trace",
       "properties": {
+        "agentTrace.claudePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your Claude Code CLI (claude). Empty: found on PATH or in ~/.local/bin."
+        },
+        "agentTrace.codexPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your Codex CLI (codex). Empty: found on PATH."
+        },
         "agentTrace.accentColor": {
           "type": "string",
           "default": "vscode",
@@ -106,29 +126,29 @@
       "agentFlow": [
         {
           "id": "agentFlow.sessions",
-          "name": "Active Sessions"
+          "name": "Sessions"
         },
         {
           "id": "agentFlow.setup",
-          "name": "Setup (.claude)"
+          "name": "Claude Factory"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "agentFlow.sessions",
-        "contents": "No Claude Code session is at work in this folder right now.\nStart one here (extension or terminal) and it shows up while it runs. Earlier sessions are in the session list of the Flow tab.\n[Open Flow](command:agentFlow.open)"
+        "contents": "No Claude Code session in this folder yet.\n[New Chat](command:agentFlow.newChat)\nAgent Trace runs your own Claude Code CLI, with your login and settings. Sessions started in a terminal or in Claude Code’s extension show here too."
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "agentFlow.open",
+          "command": "agentFlow.newChat",
           "when": "view == agentFlow.sessions",
           "group": "navigation"
         },
         {
-          "command": "agentFlow.follow",
+          "command": "agentFlow.open",
           "when": "view == agentFlow.sessions",
           "group": "navigation"
         }
@@ -137,6 +157,22 @@
         {
           "command": "agentFlow.showSession",
           "when": "false"
+        },
+        {
+          "command": "agentFlow.deleteSession",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentFlow.deleteSession",
+          "when": "view == agentFlow.sessions && viewItem == session",
+          "group": "inline"
+        },
+        {
+          "command": "agentFlow.deleteSession",
+          "when": "view == agentFlow.sessions && viewItem == session",
+          "group": "9_delete"
         }
       ]
     }
@@ -148,6 +184,7 @@
     "dev:web": "vite"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.308",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -158,6 +195,7 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "zod": "^4.6.7"
   }
 }

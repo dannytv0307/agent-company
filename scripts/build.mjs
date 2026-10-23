@@ -17,6 +17,9 @@ await build({
   target: 'node20',
   format: 'cjs',
   external: ['vscode'],
+  // The Agent SDK is an ES module that may look itself up with import.meta.url.
+  define: { 'import.meta.url': '__importMetaUrl' },
+  banner: { js: "const __importMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
   logLevel: 'info',
 })
 console.log('Agent Trace built in out/')

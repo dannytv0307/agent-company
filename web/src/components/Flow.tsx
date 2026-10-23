@@ -1,9 +1,12 @@
 import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Handle, Position, ReactFlow, getSmoothStepPath, useReactFlow, useUpdateNodeInternals, type Edge, type EdgeProps, type Node, type NodeProps } from '@xyflow/react'
-import { agentOf, duration, ago, shortPath, stepOf, useFlow, type Selection } from '../context.ts'
-import { buildLayout, filesHeight, lineage, livePath, SETUP_ROWS, type EdgeData, type NodeData } from '../layout.ts'
-import { displayName, groupOf, keyOf, kindLabel, originOf, scopeLabel, sorted, STATUS_TEXT } from '../setup.ts'
-import { send } from '../vscode.ts'
+import { agentOf, duration, ago, shortPath, stepOf, useFlow, useLane, type Selection } from '../context.ts'
+import { buildLayout, filesHeight, foldOf, lineage, livePath, SETUP_ROWS, SIZE, type EdgeData, type Fold, type NodeData } from '../layout.ts'
+import type { Engine } from '../../../shared/model.ts'
+import { BOTH_NOTE } from '../../../shared/model.ts'
+import { displayName, factoryName, groupOf, hintOf, keyOf, kindLabel, originOf, scopeLabel, sorted, STATUS_TEXT } from '../setup.ts'
+import { remember, remembered, send } from '../vscode.ts'
+import { decide } from './Chat.tsx'
 import { pendingStep, waitingText } from '../../../shared/waiting.ts'
 
 type FlowNode = Node<NodeData>
@@ -26,6 +29,8 @@ const same = (a: Selection | null, b: Selection) => !!a && JSON.stringify(a) ===
 const FocusContext = createContext<Set<string> | null>(null)
 /** The nodes work is going through right now. */
 const LiveContext = createContext<Set<string> | null>(null)
+/** Fold the Claude factory into a tab, or one kind of it into its header (remembered with the tab). */
+const FoldContext = createContext<{ toggleFactory: (e: Engine) => void; toggleGroup: (key: string) => void }>({ toggleFactory: () => {}, toggleGroup: () => {} })
 
 /** Tool → a glyph for its chip. */
 function glyph(tool: string): string {
@@ -41,22 +46,24 @@ function glyph(tool: string): string {
 }
 
 function PromptNode() {
-  const { view, selected } = useFlow()
-  const t = view.turn
+  const { view, lanes, direct, selected } = useFlow()
+  // The prompt the user sent: from a lane it went to straight, not one given its task by the other agent.
+  const t = (lanes.find((l) => !l.idle && (!direct.length || direct.includes(l.engine)))?.view ?? view).turn
   return (
     <div className={`node prompt${same(selected, { kind: 'prompt' }) ? ' selected' : ''}`}>
-      <Out />
+      <Handle type="source" position={Position.Right} id="right" style={{ ...hidden, top: SIZE.main.h / 2 }} />
+      <Handle type="source" position={Position.Bottom} id="bottom" style={hidden} />
       <div className="node-head">
         <span className="kicker">You</span>
         {t && <span className="when">{ago(t.start)}</span>}
       </div>
-      <div className="prompt-text">{t?.prompt ?? 'No prompt yet'}</div>
+      <div className="prompt-text">{t?.prompt?.replace(BOTH_NOTE, '').trim() ?? 'No prompt yet'}</div>
     </div>
   )
 }
 
-function CommandNode() {
-  const { view, setup } = useFlow()
+function CommandNode({ data }: NodeProps<FlowNode>) {
+  const { view, setup } = useLane(data.kind === 'command' ? data.lane : undefined)
   const c = view.turn?.command
   if (!c) return null
   const def = setup.byNode.get('command')?.[0]
@@ -76,9 +83,10 @@ function CommandNode() {
   )
 }
 
-function AgentNode({ data, id }: NodeProps<FlowNode>) {
-  const { view, setup, now, selected } = useFlow()
+function AgentNode({ data }: NodeProps<FlowNode>) {
+  const { view, setup, now, selected, lanes } = useLane(data.kind === 'agent' ? data.lane : undefined)
   if (data.kind !== 'agent') return null
+  const idle = !!lanes.find((l) => l.engine === data.lane)?.idle
   const a = agentOf(view, data.agentId)
   if (!a) return null
   const main = a.kind === 'main'
@@ -88,21 +96,24 @@ function AgentNode({ data, id }: NodeProps<FlowNode>) {
   const asking = !!wait && pendingStep(view)?.agent.id === a.id
   const doing = asking ? `Waiting for you: ${wait}` : main && !view.turn ? 'Waiting for a prompt' : running ? (step ? `${step.tool} ${step.label}` : main ? (a.said ? 'Writing…' : 'Thinking…') : a.steps.length ? 'Working…' : 'Starting…') : a.status === 'error' ? (main ? 'Stopped' : 'Failed') : 'Done'
   const elapsed = (a.end ?? (running ? now : a.start)) - a.start
-  const def = setup.byNode.get(id)?.find((i) => i.kind === 'agent')
+  const def = setup.byNode.get(main ? 'agent:main' : `agent:${a.id}`)?.find((i) => i.kind === 'agent')
   return (
-    <div className={`node agent ${main ? 'main' : 'sub'} st-${asking ? 'waiting' : running ? 'running' : a.status}${same(selected, { kind: 'agent', id: a.id }) ? ' selected' : ''}`}>
+    <div className={`node agent ${main ? 'main' : 'sub'} eng-${data.lane} st-${asking ? 'waiting' : running ? 'running' : a.status}${idle ? ' idle' : ''}${same(selected, { kind: 'agent', id: a.id, lane: data.lane }) ? ' selected' : ''}`}>
       <In />
       <Out />
       <FromSetup />
+      <Handle type="source" position={Position.Top} id="top" style={hidden} />
+      <Handle type="source" position={Position.Bottom} id="bottom" style={hidden} />
       <div className="node-head">
-        <span className="avatar">{main ? 'C' : a.type === 'Explore' ? '⌕' : a.type === 'Plan' ? '◇' : '✦'}</span>
-        <span className="agent-name" title={main ? 'Claude' : a.type}>
-          {main ? 'Claude' : a.type}
+        <span className="avatar">{main ? (data.lane === 'codex' ? 'X' : 'C') : a.type === 'Explore' ? '⌕' : a.type === 'Plan' ? '◇' : '✦'}</span>
+        <span className="agent-name" title={a.type}>
+          {a.type}
         </span>
         <span className="dot" />
       </div>
       {main && a.model && <div className="agent-model">{a.model.replace(/^claude-/, '')}</div>}
       {!main && <div className="agent-title">{a.title}</div>}
+      {main && view.turn?.prompt && lanes.length > 1 && <div className="agent-title" title={view.turn.prompt}>{view.turn.prompt.replace(BOTH_NOTE, '').trim()}</div>}
       <div className={`agent-doing${asking ? ' waiting' : running ? ' live' : ''}`}>{doing}</div>
       <div className="agent-meta">
         {!main && def && (
@@ -121,13 +132,36 @@ function AgentNode({ data, id }: NodeProps<FlowNode>) {
 }
 
 function StepNode({ data }: NodeProps<FlowNode>) {
-  const { view, now, selected } = useFlow()
+  const { view, now, selected, asks } = useLane(data.kind === 'step' ? data.lane : undefined)
   if (data.kind !== 'step') return null
   const hit = stepOf(view, data.stepId)
   if (!hit) return null
   const s = hit.step
+  // Claude asking about this very call: answer it here.
+  const ask = asks.find((a) => a.toolUseId === s.id)
+  if (ask)
+    return (
+      <div className="node step st-waiting asking" title={ask.kind === 'permission' ? ask.title : `${s.tool} ${s.label}`}>
+        <In />
+        <span className="glyph">{glyph(s.tool)}</span>
+        <span className="step-tool">{s.tool}</span>
+        <span className="step-label">{s.label}</span>
+        {ask.kind === 'permission' ? (
+          <span className="step-ask">
+            <button className="mini allow" onClick={(e) => (e.stopPropagation(), decide(ask.requestId, { kind: 'allow' }))}>
+              Allow
+            </button>
+            <button className="mini deny" onClick={(e) => (e.stopPropagation(), decide(ask.requestId, { kind: 'deny' }))}>
+              Deny
+            </button>
+          </span>
+        ) : (
+          <span className="step-time">answer in chat</span>
+        )}
+      </div>
+    )
   return (
-    <div className={`node step st-${waitingText(view) && pendingStep(view)?.step.id === s.id ? 'waiting' : s.status}${same(selected, { kind: 'step', id: s.id }) ? ' selected' : ''}`} title={`${s.tool} ${s.label}`}>
+    <div className={`node step st-${waitingText(view) && pendingStep(view)?.step.id === s.id ? 'waiting' : s.status}${same(selected, { kind: 'step', id: s.id, lane: data.lane }) ? ' selected' : ''}`} title={`${s.tool} ${s.label}`}>
       <In />
       <span className="glyph">{glyph(s.tool)}</span>
       <span className="step-tool">{s.tool}</span>
@@ -141,16 +175,16 @@ function StepNode({ data }: NodeProps<FlowNode>) {
 }
 
 function OutputNode({ data }: NodeProps<FlowNode>) {
-  const { view, selected } = useFlow()
+  const { view, selected, lanes } = useLane(data.kind === 'result' ? data.lane : undefined)
   if (data.kind !== 'result') return null
   const a = agentOf(view, data.of)
   if (!a?.output) return null
   const failed = a.status === 'error'
   return (
-    <div className={`node output${failed ? ' failed' : ''}${same(selected, { kind: 'output', of: a.id }) ? ' selected' : ''}`} title={a.output}>
+    <div className={`node output${failed ? ' failed' : ''}${same(selected, { kind: 'output', of: a.id, lane: data.lane }) ? ' selected' : ''}`} title={a.output}>
       <In />
       <div className="node-head">
-        <span className="kicker">{failed ? '! ' : '✓ '}{a.kind === 'main' ? 'Reply' : `${a.type} report`}</span>
+        <span className="kicker">{failed ? '! ' : '✓ '}{a.kind === 'main' ? (lanes.length > 1 ? `${a.type}’s reply` : 'Reply') : `${a.type} report`}</span>
         {a.end && <span className="when">{ago(a.end)}</span>}
       </div>
       <div className="output-text">{a.output.replace(/^#+\s*/gm, '').replace(/\*\*/g, '')}</div>
@@ -158,14 +192,15 @@ function OutputNode({ data }: NodeProps<FlowNode>) {
   )
 }
 
-function FilesNode() {
-  const { view, selected } = useFlow()
+function FilesNode({ data }: NodeProps<FlowNode>) {
+  const lane = data.kind === 'files' ? data.lane : undefined
+  const { view, selected, lanes } = useLane(lane)
   const files = view.files.filter((f) => f.writes > 0).sort((a, b) => b.last - a.last)
   return (
-    <div className={`node files${same(selected, { kind: 'files' }) ? ' selected' : ''}`} style={{ height: filesHeight(files.length) }}>
+    <div className={`node files${same(selected, { kind: 'files', lane }) ? ' selected' : ''}`} style={{ height: filesHeight(files.length) }}>
       <In />
       <div className="node-head">
-        <span className="kicker">Files changed · {files.length}</span>
+        <span className="kicker">{lanes.length > 1 ? `Files ${view.main.type} changed` : 'Files changed'} · {files.length}</span>
       </div>
       <ul>
         {files.slice(0, 8).map((f) => (
@@ -191,10 +226,13 @@ function FilesNode() {
 
 /** One kind of setup — agents, skills, MCP servers… — with the items in use lit up. */
 function SetupNode({ data, id }: NodeProps<FlowNode>) {
-  const { setup, selected, select } = useFlow()
+  const lane = data.kind === 'setup' ? data.lane : undefined
+  const { setup, selected, select } = useLane(lane)
+  const { toggleGroup } = useContext(FoldContext)
   const group = data.kind === 'setup' ? data.group : 'memory'
+  const folded = data.kind === 'setup' && data.folded
   const items = sorted(setup, group)
-  const rows = group === 'memory' ? 0 : Math.min(items.length, SETUP_ROWS)
+  const rows = group === 'memory' || folded ? 0 : Math.min(items.length, SETUP_ROWS)
   // React Flow measures handles once; new rows need it to look again.
   const updateInternals = useUpdateNodeInternals()
   // (In braces: what it returns must not be taken for a cleanup function.)
@@ -207,9 +245,12 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
   const live = items.some((i) => usedBy(keyOf(i))?.some((u) => u.live))
   const used = items.filter((i) => usedBy(keyOf(i))?.length).length
   const found = data.group === 'found'
-  const trouble = items.filter((i) => i.status === 'failed' || i.status === 'needs-auth').length
+  // MCP servers in trouble say so before anything else: failed ones first, then those waiting for a sign-in.
+  const failed = items.filter((i) => i.status === 'failed').length
+  const signIn = items.filter((i) => i.status === 'needs-auth').length
+  const trouble = failed ? `${failed} failed` : signIn ? `${signIn} need${signIn === 1 ? 's' : ''} sign-in` : ''
   return (
-    <div className={`node setup${found ? ' found' : live ? ' live' : used ? ' used' : ''}${selected?.kind === 'setup' && selected.group === data.group ? ' selected' : ''}`}>
+    <div className={`node setup${folded ? ' folded' : ''}${found ? ' found' : live ? ' live' : used ? ' used' : ''}${selected?.kind === 'setup' && selected.group === data.group && (selected.lane ?? 'claude') === data.lane ? ' selected' : ''}`}>
       <Out />
       {/* One handle per row, so an edge leaves from the very item in use. Rows start 41px down (border,
           padding, header) and are 22px high. */}
@@ -217,40 +258,58 @@ function SetupNode({ data, id }: NodeProps<FlowNode>) {
         <Handle key={n} type="source" position={Position.Right} id={`row${n}`} style={{ ...hidden, top: 52 + n * 22 }} />
       ))}
       <div className="node-head">
+        <button
+          className="fold"
+          aria-expanded={!folded}
+          title={folded ? `Show ${g.title.toLowerCase()}` : `Fold ${g.title.toLowerCase()} away`}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleGroup(`${data.lane}:${data.group}`)
+          }}
+        >
+          <Chevron open={!folded} />
+        </button>
         <span className="setup-glyph">{g.glyph}</span>
         <span className="setup-title">{g.title}</span>
         <span className="count">{items.length}</span>
-        {used > 0 && data.group !== 'memory' && <span className="in-use">{used} in use</span>}
-        {!used && trouble > 0 && <span className="in-use trouble">{trouble} not connected</span>}
+        {trouble ? (
+          <span className={`in-use trouble${failed ? ' bad' : ''}`} title={[failed && `${failed} failed`, signIn && `${signIn} waiting for a sign-in`, used && `${used} in use this turn`].filter(Boolean).join(' · ')}>
+            {trouble}
+          </span>
+        ) : (
+          used > 0 && data.group !== 'memory' && <span className="in-use">{used} in use</span>
+        )}
       </div>
-      <ul>
-        {items.length === 0 && <li className="hint">{g.hint}</li>}
-        {items.slice(0, SETUP_ROWS).map((i) => {
-          const u = usedBy(keyOf(i))
-          const state = u?.some((x) => x.live) ? ' live' : u?.length ? ' used' : ''
-          return (
-            <li
-              key={keyOf(i)}
-              className={`setup-row${state}${i.status ? ` ms-${i.status}` : ''}${i.scope === 'builtin' || i.scope === 'connector' ? ' soft' : ''}${selected?.kind === 'setup' && selected.item === keyOf(i) ? ' picked' : ''}`}
-            >
-              <button
-                title={[displayName(i), i.status && (i.error ? `${STATUS_TEXT[i.status]}: ${i.error}` : STATUS_TEXT[i.status]), i.unloaded ?? i.description]
-                  .filter(Boolean)
-                  .join('\n')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  select({ kind: 'setup', group: data.group, item: keyOf(i) })
-                }}
+      {!folded && (
+        <ul>
+          {items.length === 0 && <li className="hint">{hintOf(data.group, setup.engine)}</li>}
+          {items.slice(0, SETUP_ROWS).map((i) => {
+            const u = usedBy(keyOf(i))
+            const state = u?.some((x) => x.live) ? ' live' : u?.length ? ' used' : ''
+            return (
+              <li
+                key={keyOf(i)}
+                className={`setup-row${state}${i.status ? ` ms-${i.status}` : ''}${i.scope === 'builtin' || i.scope === 'connector' ? ' soft' : ''}${selected?.kind === 'setup' && selected.item === keyOf(i) && (selected.lane ?? 'claude') === data.lane ? ' picked' : ''}`}
               >
-                <i />
-                <span className="setup-name">{displayName(i)}</span>
-                <span className={`scope sc-${found ? 'found' : i.scope}`}>{found ? kindLabel(i) : scopeLabel(i)}</span>
-              </button>
-            </li>
-          )
-        })}
-        {items.length > SETUP_ROWS && <li className="more">+{items.length - SETUP_ROWS} more</li>}
-      </ul>
+                <button
+                  title={[displayName(i), i.status && (i.error ? `${STATUS_TEXT[i.status]}: ${i.error}` : STATUS_TEXT[i.status]), i.unloaded ?? i.description]
+                    .filter(Boolean)
+                    .join('\n')}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    select({ kind: 'setup', group: data.group, item: keyOf(i), lane: data.lane })
+                  }}
+                >
+                  <i />
+                  <span className="setup-name">{displayName(i)}</span>
+                  <span className={`scope sc-${found ? 'found' : i.scope}`}>{found ? kindLabel(i) : scopeLabel(i)}</span>
+                </button>
+              </li>
+            )
+          })}
+          {items.length > SETUP_ROWS && <li className="more">+{items.length - SETUP_ROWS} more</li>}
+        </ul>
+      )}
     </div>
   )
 }
@@ -261,7 +320,37 @@ function FrameNode({ data }: NodeProps<FlowNode>) {
   if (data.kind !== 'frame') return null
   const on = !!live && data.members.some((m) => live.has(m))
   return (
-    <div className={`frame${on ? ' on' : ''}`}>
+    <div className={`frame${on ? ' on' : ''}${data.idle ? ' idle' : ''}`}>
+      {data.fold ? <FoldTitle title={data.title} engine={data.fold} /> : <span className="frame-title">{data.title}</span>}
+    </div>
+  )
+}
+
+/** Open (pointing down) or folded (pointing right), drawn: a text arrow may be missing from the font. */
+const Chevron = ({ open }: { open: boolean }) => (
+  <svg className={`chevron${open ? ' open' : ''}`} viewBox="0 0 10 10" aria-hidden>
+    <path d="M3.5 2 L6.5 5 L3.5 8" />
+  </svg>
+)
+
+/** A factory's title: folds it into a tab. */
+function FoldTitle({ title, engine }: { title: string; engine: Engine }) {
+  const { toggleFactory } = useContext(FoldContext)
+  return (
+    <button className={`frame-title frame-fold eng-${engine}`} aria-expanded title={`Fold the ${factoryName(engine)} into a tab`} onClick={() => toggleFactory(engine)}>
+      <Chevron open /> {title}
+    </button>
+  )
+}
+
+/** A factory folded into a tab: click to open it again. Edges of what is in use leave from it. */
+function FactoryNode({ data, id }: NodeProps<FlowNode>) {
+  const live = useContext(LiveContext)
+  if (data.kind !== 'factory') return null
+  return (
+    <div className={`factory-tab eng-${data.lane}${live?.has(id) ? ' on' : ''}`} title={`Show the ${factoryName(data.lane)}`} role="button" aria-expanded={false}>
+      <Out />
+      <Chevron open={false} />
       <span className="frame-title">{data.title}</span>
     </div>
   )
@@ -327,15 +416,20 @@ function FlowEdgeView(props: EdgeProps<FlowEdge>) {
           ? `M ${x + 8} ${y - 4.5} L ${x} ${y} L ${x + 8} ${y + 4.5} Z`
           : `M ${x - 8} ${y - 4.5} L ${x} ${y} L ${x - 8} ${y + 4.5} Z`
   return (
-    <g className={`edge${data?.live ? ' live' : ''}${data?.tone ? ` ${data.tone}` : ''}${data?.setup ? ' from-setup' : ''}${dim ? ' dim' : ''}`}>
+    <g className={`edge${data?.live ? ' live' : ''}${data?.tone ? ` ${data.tone}` : ''}${data?.setup ? ' from-setup' : ''}${data?.handoff ? ` handoff eng-${data.handoff}` : ''}${dim ? ' dim' : ''}`}>
       <path d={d} className="edge-line" />
       <path d={head} className="edge-head" />
       {data?.live && <Comets d={d} length={length} />}
+      {data?.label && pts && (
+        <text className="edge-label" x={pts[0][0] + 10} y={(pts[0][1] + pts[pts.length - 1][1]) / 2 + 4}>
+          {data.label}
+        </text>
+      )}
     </g>
   )
 }
 
-const nodeTypes = { prompt: PromptNode, command: CommandNode, agent: AgentNode, step: StepNode, result: OutputNode, files: FilesNode, frame: FrameNode, setup: SetupNode }
+const nodeTypes = { prompt: PromptNode, command: CommandNode, agent: AgentNode, step: StepNode, result: OutputNode, files: FilesNode, frame: FrameNode, setup: SetupNode, factory: FactoryNode }
 const edgeTypes = { flow: FlowEdgeView }
 const FIT = { padding: 0.08, maxZoom: 1 }
 
@@ -348,7 +442,7 @@ function useStable(next: FlowNode[]): FlowNode[] {
   return useMemo(() => {
     const out = next.map((n) => {
       const p = prev.current.get(n.id)
-      return p && p.position.x === n.position.x && p.position.y === n.position.y && p.height === n.height && p.type === n.type ? p : n
+      return p && p.position.x === n.position.x && p.position.y === n.position.y && p.height === n.height && p.type === n.type && JSON.stringify(p.data) === JSON.stringify(n.data) ? p : n
     })
     prev.current = new Map(out.map((n) => [n.id, n]))
     return out
@@ -368,45 +462,45 @@ interface Chip {
  * The paths work is taking right now: what started it (/command → Claude), then one branch per thing at
  * work — a subagent and its tool, or a tool of Claude's own.
  */
-function pathsOf(view: ReturnType<typeof useFlow>['view'], setup: ReturnType<typeof useFlow>['setup']): { head: Chip[]; branches: Chip[][] } | null {
+function pathsOf(view: ReturnType<typeof useFlow>['view'], setup: ReturnType<typeof useFlow>['setup'], lane?: Engine): { head: Chip[]; branches: Chip[][] } | null {
   const turn = view.turn
   if (!turn) return null
   const working = view.status === 'working'
   const cmdDef = setup.byNode.get('command')?.[0]
   const head: Chip[] = [
     ...(turn.command ? [{ label: `/${turn.command.name}`, origin: cmdDef ? originOf(cmdDef) : undefined, kind: 'command' as const, to: { kind: 'prompt' } as Selection }] : []),
-    { label: 'Claude', kind: 'main', live: working, to: { kind: 'agent', id: 'main' } },
+    { label: view.main.type, kind: 'main', live: working, to: { kind: 'agent', id: 'main', lane } },
   ]
   const background = view.subagents.some((a) => a.status === 'running')
   if (!working && !background) {
     const done = view.main.status === 'error' ? 'Stopped' : view.main.output ? 'Replied' : 'Idle'
-    return { head, branches: [[{ label: done, kind: 'state', to: view.main.output ? { kind: 'output', of: 'main' } : undefined }]] }
+    return { head, branches: [[{ label: done, kind: 'state', to: view.main.output ? { kind: 'output', of: 'main', lane } : undefined }]] }
   }
   const branches: Chip[][] = []
   for (const a of view.subagents.filter((x) => x.status === 'running')) {
     const def = setup.byNode.get(`agent:${a.id}`)?.find((i) => i.kind === 'agent')
     const step = [...a.steps].reverse().find((s) => s.status === 'running')
     branches.push([
-      { label: a.type, origin: def ? originOf(def) : undefined, kind: 'sub', live: true, to: { kind: 'agent', id: a.id } },
-      ...(step ? [{ label: `${step.tool} ${step.label}`.trim(), kind: 'step' as const, live: true, to: { kind: 'step', id: step.id } as Selection }] : []),
+      { label: a.type, origin: def ? originOf(def) : undefined, kind: 'sub', live: true, to: { kind: 'agent', id: a.id, lane } },
+      ...(step ? [{ label: `${step.tool} ${step.label}`.trim(), kind: 'step' as const, live: true, to: { kind: 'step', id: step.id, lane } as Selection }] : []),
     ])
   }
   for (const step of view.main.steps.filter((s) => s.status === 'running' && s.tool !== 'Agent' && s.tool !== 'Task'))
-    branches.push([{ label: `${step.tool} ${step.label}`.trim(), kind: 'step', live: true, to: { kind: 'step', id: step.id } }])
+    branches.push([{ label: `${step.tool} ${step.label}`.trim(), kind: 'step', live: true, to: { kind: 'step', id: step.id, lane } }])
   if (!branches.length) branches.push([{ label: view.main.said ? 'Writing…' : 'Thinking…', kind: 'state', live: true }])
   // Claude replied, its background subagents still at work.
-  if (!working) branches.push([{ label: view.main.output ? 'Replied' : 'Idle', kind: 'state', to: view.main.output ? { kind: 'output', of: 'main' } : undefined }])
+  if (!working) branches.push([{ label: view.main.output ? 'Replied' : 'Idle', kind: 'state', to: view.main.output ? { kind: 'output', of: 'main', lane } : undefined }])
   return { head, branches }
 }
 
 function Chips({ chips }: { chips: Chip[] }) {
-  const { select } = useFlow()
+  const { select, openChat } = useFlow()
   return (
     <>
       {chips.map((c, i) => (
         <Fragment key={i}>
           {i > 0 && <span className="chain-arrow">→</span>}
-          <button className={`chip ck-${c.kind}${c.live ? ' live' : ''}`} disabled={!c.to} onClick={() => c.to && select(c.to)} title={c.origin ? `${c.label} · ${c.origin}` : c.label}>
+          <button className={`chip ck-${c.kind}${c.live ? ' live' : ''}`} disabled={!c.to} onClick={() => c.to && (c.to.kind === 'prompt' && openChat ? openChat() : select(c.to))} title={c.origin ? `${c.label} · ${c.origin}` : c.label}>
             <span className="chip-label">{c.label}</span>
             {c.origin && <em>{c.origin}</em>}
           </button>
@@ -416,9 +510,9 @@ function Chips({ chips }: { chips: Chip[] }) {
   )
 }
 
-function NowBar() {
-  const { view, setup, select } = useFlow()
-  const paths = pathsOf(view, setup)
+function NowBar({ lane }: { lane?: Engine }) {
+  const { view, setup, select } = useLane(lane)
+  const paths = pathsOf(view, setup, lane)
   if (!paths) return null
   const working = view.status === 'working'
   const background = !working && view.subagents.some((a) => a.status === 'running')
@@ -437,9 +531,9 @@ function NowBar() {
       <div className={`branches${shown.length > 1 ? ' many' : ''}`}>
         {wait && (
           <div className="chain ask">
-            <button className="chip ck-ask" onClick={() => asked && select({ kind: 'step', id: asked.step.id })} title="Answer it in Claude Code">
+            <button className="chip ck-ask" onClick={() => asked && select({ kind: 'step', id: asked.step.id, lane })} title={view.engine === 'codex' ? 'Answer it in the chat' : 'Answer it in Claude Code'}>
               <span className="chip-label">{wait}</span>
-              <em>answer in Claude Code</em>
+              <em>answer in the chat or on the flow</em>
             </button>
           </div>
         )}
@@ -455,8 +549,25 @@ function NowBar() {
 }
 
 export function Flow() {
-  const { view, setup, select } = useFlow()
-  const layout = useMemo(() => buildLayout(view, setup), [view, setup])
+  const { view, lanes, handoffs, direct, select, openChat } = useFlow()
+  const [fold, setFold] = useState<Fold>(() => foldOf(remembered({ fold: {} as unknown }).fold))
+  const changeFold = (f: (x: Fold) => Fold) =>
+    setFold((x) => {
+      const next = f(x)
+      remember({ fold: next })
+      return next
+    })
+  const folds = useMemo(
+    () => ({
+      toggleFactory: (e: Engine) => changeFold((x) => ({ ...x, factory: x.factory.includes(e) ? x.factory.filter((k) => k !== e) : [...x.factory, e] })),
+      toggleGroup: (g: string) => changeFold((x) => ({ ...x, groups: x.groups.includes(g) ? x.groups.filter((k) => k !== g) : [...x.groups, g] })),
+    }),
+    [],
+  )
+  const layout = useMemo(() => buildLayout(lanes, fold, handoffs, direct), [lanes, fold, handoffs, direct])
+  // A now bar for each agent at work; when none is, the first agent's last turn.
+  const nowLanes = lanes.filter((l) => !l.idle && (l.view.status === 'working' || l.view.subagents.some((a) => a.status === 'running'))).map((l) => l.engine)
+  const bars = nowLanes.length ? nowLanes : [(lanes.find((l) => !l.idle && direct.includes(l.engine)) ?? lanes.find((l) => !l.idle) ?? lanes[0])?.engine]
   const nodes = useStable(layout.nodes)
   const { fitView } = useReactFlow()
 
@@ -475,7 +586,7 @@ export function Flow() {
   useEffect(() => {
     const t = setTimeout(() => void fitView({ ...FIT, duration: 250 }), 50)
     return () => clearTimeout(t)
-  }, [shape, view.id, fitView])
+  }, [shape, view.id, fitView, fold, lanes.length])
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = box.current
@@ -494,48 +605,56 @@ export function Flow() {
 
   return (
     <div className="flow-wrap">
-      <NowBar />
-      <FocusContext.Provider value={focus}>
-        <LiveContext.Provider value={live}>
-          <div className="canvas" ref={box}>
-            <style>{focusCss}</style>
-            <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden>
-              <defs>
-                <linearGradient id="comet-tail" x1="0" x2="1" y1="0" y2="0">
-                  <stop offset="0" style={{ stopColor: 'var(--accent)', stopOpacity: 0 }} />
-                  <stop offset="1" style={{ stopColor: 'var(--accent)', stopOpacity: 0.9 }} />
-                </linearGradient>
-              </defs>
-            </svg>
-            <ReactFlow<FlowNode, FlowEdge>
-              nodes={nodes}
-              edges={layout.edges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              fitView
-              fitViewOptions={FIT}
-              minZoom={0.25}
-              maxZoom={1.6}
-              nodesConnectable={false}
-              nodesDraggable={false}
-              elementsSelectable={false}
-              proOptions={{ hideAttribution: true }}
-              onNodeClick={(_, n) => {
-                const d = n.data
-                if (d.kind === 'prompt' || d.kind === 'command') select({ kind: 'prompt' })
-                else if (d.kind === 'agent') select({ kind: 'agent', id: d.agentId })
-                else if (d.kind === 'step') select({ kind: 'step', id: d.stepId })
-                else if (d.kind === 'result') select({ kind: 'output', of: d.of })
-                else if (d.kind === 'files') select({ kind: 'files' })
-                else if (d.kind === 'setup') select({ kind: 'setup', group: d.group })
-              }}
-              onPaneClick={() => select(null)}
-              onNodeMouseEnter={(_, n) => n.type !== 'frame' && setHover(n.id)}
-              onNodeMouseLeave={() => setHover(null)}
-            />
-          </div>
-        </LiveContext.Provider>
-      </FocusContext.Provider>
+      {bars.map((b) => (
+        <NowBar key={b ?? 'none'} lane={b} />
+      ))}
+      <FoldContext.Provider value={folds}>
+        <FocusContext.Provider value={focus}>
+          <LiveContext.Provider value={live}>
+            <div className="canvas" ref={box}>
+              <style>{focusCss}</style>
+              <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden>
+                <defs>
+                  <linearGradient id="comet-tail" x1="0" x2="1" y1="0" y2="0">
+                    <stop offset="0" style={{ stopColor: 'var(--accent)', stopOpacity: 0 }} />
+                    <stop offset="1" style={{ stopColor: 'var(--accent)', stopOpacity: 0.9 }} />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <ReactFlow<FlowNode, FlowEdge>
+                nodes={nodes}
+                edges={layout.edges}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                fitView
+                fitViewOptions={FIT}
+                minZoom={0.25}
+                maxZoom={1.6}
+                nodesConnectable={false}
+                nodesDraggable={false}
+                elementsSelectable={false}
+                proOptions={{ hideAttribution: true }}
+                onNodeClick={(_, n) => {
+                  const d = n.data
+                  if (d.kind === 'prompt' || d.kind === 'command') {
+                    if (openChat) openChat()
+                    else select({ kind: 'prompt' })
+                  }
+                  else if (d.kind === 'agent') select({ kind: 'agent', id: d.agentId, lane: d.lane })
+                  else if (d.kind === 'step') select({ kind: 'step', id: d.stepId, lane: d.lane })
+                  else if (d.kind === 'result') select({ kind: 'output', of: d.of, lane: d.lane })
+                  else if (d.kind === 'files') select({ kind: 'files', lane: d.lane })
+                  else if (d.kind === 'setup') select({ kind: 'setup', group: d.group, lane: d.lane })
+                  else if (d.kind === 'factory') folds.toggleFactory(d.lane)
+                }}
+                onPaneClick={() => select(null)}
+                onNodeMouseEnter={(_, n) => n.type !== 'frame' && setHover(n.id)}
+                onNodeMouseLeave={() => setHover(null)}
+              />
+            </div>
+          </LiveContext.Provider>
+        </FocusContext.Provider>
+      </FoldContext.Provider>
     </div>
   )
 }

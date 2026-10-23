@@ -10,19 +10,19 @@ export function pendingStep(v: SessionView): { step: Step; agent: Agent } | unde
   return best
 }
 
-/** Tools that always wait for the user, whatever else Claude Code says. */
-const ASKS: Record<string, string> = {
-  AskUserQuestion: 'Claude asked you a question',
-  ExitPlanMode: 'Claude wants your OK on its plan',
+/** Tools that always wait for the user, whatever else the agent says. */
+const ASKS: Record<string, (who: string) => string> = {
+  AskUserQuestion: (who) => `${who} asked you a question`,
+  ExitPlanMode: (who) => `${who} wants your OK on its plan`,
 }
 
 /** What Claude is waiting for, or undefined when it is not. */
 export function waitingText(v: SessionView | undefined): string | undefined {
   if (!v || !v.turn || v.turn.end) return undefined
   const p = pendingStep(v)
-  if (p && ASKS[p.step.tool]) return ASKS[p.step.tool]
+  if (p && ASKS[p.step.tool]) return ASKS[p.step.tool](v.main.type)
   if (!v.waiting) return undefined
-  const who = p && p.agent.kind === 'sub' ? p.agent.type : 'Claude'
+  const who = p && p.agent.kind === 'sub' ? p.agent.type : v.main.type
   switch (v.waiting.reason) {
     case 'input needed':
       return `${who} needs your input`
@@ -33,5 +33,5 @@ export function waitingText(v: SessionView | undefined): string | undefined {
   }
   if (p) return `${who} asks to run ${p.step.tool}${p.step.label ? ` ${p.step.label}` : ''}`
   if (v.waiting.reason === 'dialog open') return 'A dialog is open in Claude Code'
-  return v.waiting.reason ? `Claude is waiting: ${v.waiting.reason}` : 'Claude is waiting for you'
+  return v.waiting.reason ? `${v.main.type} is waiting: ${v.waiting.reason}` : `${v.main.type} is waiting for you`
 }

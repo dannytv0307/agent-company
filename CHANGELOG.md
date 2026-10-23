@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.4.0
+
+Agent Trace now has a chat: talk to Claude Code and Codex — one of them, or both — and watch them work, side by side, in one tab.
+
+- **Claude and Codex in one chat:** each message goes to Claude, to Codex, or to both (Send to, above the message box). With both, Codex makes the changes and Claude reviews and advises. Every line in the chat carries its agent's mark.
+- **Hand-over:** with it on, Claude can give Codex a task (`ask_codex`) and Codex can give Claude one (`ask_claude`), one step only. The task and the answer show in the chat, and on the flow as a line between the two agents. Whatever the other agent asks permission for is asked of you, in the chat or on the flow.
+- **A lane per agent:** the flow draws Claude above Codex, each with its tools, subagents and reply; the Claude factory and the Codex factory sit one above the other on the left, each foldable. A Claude session and the Codex thread of the same chat are remembered together and open together.
+- **Codex, as your own Codex runs it** (through `codex app-server`, as Codex's VS Code extension does): replies stream in, its commands, file changes, MCP calls and subagents go on the flow, and its approvals (commands, file changes, more permissions, questions) are answered in the chat or on the flow. Its threads of the folder are listed with Claude's sessions, continued here, or archived.
+- **The Codex factory**, as Codex reports it for the folder: AGENTS.md, skills, MCP servers and their connection, plugins, hooks and config files. A skill lights up when Codex reads it.
+- With Codex, `/` lists its skills (inserting `$skill`), the model and effort pickers show its models and levels, and the mode picker its approvals: Read only, Auto, Full access.
+- **New setting** `agentTrace.codexPath`: where your `codex` is, if it is not on PATH.
+
+- **Chat with your own Claude Code** (the CLI you installed and logged into, with your settings, agents, skills and MCP servers). It sits in a drawer on the left of the tab that folds away, as wide as you drag it:
+  - replies stream in;
+  - **Stop** ends a turn;
+  - type `/` for slash commands;
+  - pick the model, the permission mode, and the effort on a slider: drag it, click a level, or use the arrow keys; the arrow button goes back to your default.
+- **Answer Claude in the chat or on the flow:**
+  - permissions: Allow, Always allow or Deny, also right on the waiting tool call;
+  - questions: pick an option or write your own answer;
+  - plans: approve, or keep planning.
+- **MCP servers in sync with Claude Code:** in the MCP servers card and its details, the status comes live from the Claude Code run here, checked again while it runs. **Check now** and **Reconnect** (one server, or all the failed ones) work without sending a message.
+- **MCP servers listed by where they are configured:** this folder's first (project, then local), then yours (user), then plugins, claude.ai connectors and the rest.
+- **MCP statuses that stay right:**
+  - a failed or signed-out server no longer loses its status when Claude Code later reports other tools;
+  - the card says what is wrong first, e.g. *1 failed* in red or *14 need sign-in* in amber, and each server shows *Connected · 47 tools*, *Failed to connect: …* or *Needs sign-in*;
+  - a server of the folder's .mcp.json not yet approved says *Waiting for your approval*, and one turned off for the folder says *Disabled*;
+  - a server defined both for the project and for you shows once, from the scope Claude Code uses; the other moves to *Here, not loaded*;
+  - Claude Code's own link to VS Code is marked built-in instead of passing for a connector;
+  - while servers are still connecting, they are checked again every 2 seconds.
+- **Continue any session of the folder**: open it from the sidebar or the chat's session list. Sessions stay ordinary Claude Code sessions, so `/resume` works on them in a terminal or in Claude Code's extension.
+- **Delete a session** from the sidebar. It goes to the trash, so it can be restored.
+- **Sessions run elsewhere still show.** Opening the tab while Claude Code works in a terminal or in its extension shows that session's flow, and a wait there still gets a notification.
+- **The sidebar lists all the folder's sessions**, with the ones at work marked, instead of only the active ones.
+- **The tab comes back after a reload of VS Code.**
+- **The setup is now the Claude factory**, in the flow and in the sidebar, and in the flow it folds:
+  - click its title to fold it into a tab; what is in use still has its edges;
+  - each kind (agents, slash commands, skills, MCP servers…) folds into its header with the arrow beside it;
+  - what is folded is remembered with the tab.
+- **All frames are level at the top**: the Claude factory, the prompt, the main agent, the tools and the output start on the same row.
+- **New setting** `agentTrace.claudePath`: where your `claude` is, if it is not on PATH.
+- The Follow command is gone: the tab shows the session you open, or the new chat you start.
+
 ## 0.3.1
 
 Subagents now match Claude Code's own agent map:

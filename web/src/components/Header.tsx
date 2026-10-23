@@ -23,7 +23,7 @@ function AccentPicker({ accent, onAccent }: { accent: Accent; onAccent: (a: Acce
   )
 }
 
-/** The session on screen: which one, whether Claude is at work, and what it has cost so far. */
+/** The session on screen: which one, whether the agent is at work, and how much it has changed. */
 export function Header({
   view,
   sessions,
@@ -80,11 +80,6 @@ export function Header({
             {view.branch && (
               <span className="fact branch" title="Git branch">
                 ⎇ {view.branch}
-              </span>
-            )}
-            {typeof view.cost === 'number' && view.cost > 0 && (
-              <span className="fact" title="Session cost so far">
-                ${view.cost.toFixed(2)}
               </span>
             )}
             {view.linesAdded || view.linesRemoved ? (

@@ -5,7 +5,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Agent, FileTouch, Loaded, McpStatus, SessionSummary, SessionView, Step } from '../shared/model.ts'
+import type { Agent, ChatLine, FileTouch, Loaded, McpStatus, SessionSummary, SessionView, Step } from '../shared/model.ts'
 
 /** Where Claude Code keeps its data (CLAUDE_CONFIG_DIR moves it). */
 export const claudeHome = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -271,6 +271,8 @@ export class SessionReader {
   private lastPrompt = ''
   /** Tool names Claude Code announced, for the MCP servers they belong to. */
   private tools = new Set<string>()
+  /** MCP servers not connected, as the last delta that listed them said, by tool prefix. */
+  private mcpWaits = new Map<string, { status: McpStatus; error?: string }>()
 
   constructor(
     readonly id: string,
@@ -407,7 +409,6 @@ export class SessionReader {
         if (e.summary && v.title === 'Untitled session') v.title = String(e.summary)
         return
       case 'cost-state':
-        if (typeof e.totalCostUSD === 'number') v.cost = e.totalCostUSD
         if (typeof e.totalLinesAdded === 'number') v.linesAdded = e.totalLinesAdded
         if (typeof e.totalLinesRemoved === 'number') v.linesRemoved = e.totalLinesRemoved
         if (typeof e.startTime === 'number') v.start = e.startTime
@@ -469,17 +470,26 @@ export class SessionReader {
         break
       }
       case 'deferred_tools_delta': {
-        for (const t of [...strings(a.addedNames), ...strings(a.readdedNames)]) this.tools.add(t)
+        const added = [...strings(a.addedNames), ...strings(a.readdedNames)]
+        for (const t of added) this.tools.add(t)
         for (const t of strings(a.removedNames)) this.tools.delete(t)
+        const serverOf = (t: string) => t.match(/^mcp__(.+?)__/)?.[1]
+        // Servers not connected come as whole lists, but only in the deltas that carry them: a delta
+        // without them (tools of a skill, say) leaves them as they were. A server whose tools come back
+        // has connected since.
+        if (['pendingMcpServers', 'needsAuthMcpServers', 'failedMcpServers'].some((k) => k in a)) {
+          this.mcpWaits.clear()
+          for (const n of strings(a.pendingMcpServers)) this.mcpWaits.set(mcpKey(n), { status: 'pending' })
+          for (const n of strings(a.needsAuthMcpServers)) this.mcpWaits.set(mcpKey(n), { status: 'needs-auth' })
+          for (const f of Array.isArray(a.failedMcpServers) ? a.failedMcpServers : [])
+            if (f && typeof f.name === 'string') this.mcpWaits.set(mcpKey(f.name), { status: 'failed', error: typeof f.error === 'string' ? f.error : undefined })
+        } else for (const t of added) this.mcpWaits.delete(serverOf(t) ?? '')
         const status = new Map<string, { status: McpStatus; error?: string }>()
         for (const t of this.tools) {
-          const server = t.match(/^mcp__(.+?)__/)?.[1]
+          const server = serverOf(t)
           if (server) status.set(server, { status: 'connected' })
         }
-        for (const n of strings(a.pendingMcpServers)) status.set(mcpKey(n), { status: 'pending' })
-        for (const n of strings(a.needsAuthMcpServers)) status.set(mcpKey(n), { status: 'needs-auth' })
-        for (const f of Array.isArray(a.failedMcpServers) ? a.failedMcpServers : [])
-          if (f && typeof f.name === 'string') status.set(mcpKey(f.name), { status: 'failed', error: typeof f.error === 'string' ? f.error : undefined })
+        for (const [n, s] of this.mcpWaits) status.set(n, s)
         L.mcp = [...status].map(([name, s]) => ({ name, ...s }))
         break
       }
@@ -677,3 +687,28 @@ function parse(line: string): any {
     return undefined
   }
 }
+
+/** A session's conversation so far, for a chat that continues it: the prompts and Claude's replies. */
+export function readHistory(file: string, limit = 60): ChatLine[] {
+  const out: ChatLine[] = []
+  let text: string
+  try {
+    text = tailText(file, 6 << 20)
+  } catch {
+    return out
+  }
+  for (const line of text.split('\n')) {
+    const e = parse(line)
+    if (!e || e.isSidechain) continue
+    const at = e.timestamp ? Date.parse(e.timestamp) : 0
+    if (e.type === 'user') {
+      const p = promptOf(e)
+      if (p) out.push({ kind: 'user', text: p.command ? `/${p.command.name} ${p.command.args}`.trim() : p.prompt, at })
+    } else if (e.type === 'assistant') {
+      for (const b of Array.isArray(e.message?.content) ? e.message.content : [])
+        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) out.push({ kind: 'assistant', text: b.text, at })
+    }
+  }
+  return out.slice(-limit)
+}
+
