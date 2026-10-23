@@ -396,17 +396,25 @@ type SetupNode = { group: GroupKey } | { item: SetupItem }
 /** Items not loaded go in their own group, out of their kind's. */
 const inGroup = (i: SetupItem, g: GroupKey) => (g === 'found' ? !!i.unloaded : i.kind === g && !i.unloaded)
 
+/** A factory as a tree: Claude's (the setup read here, checked by sessions) or Codex's (as Codex reports it). */
 class SetupTree implements vscode.TreeDataProvider<SetupNode> {
   readonly onDidChangeTreeData = setupChanged.event
+  constructor(private readonly engine: Engine) {}
+  private get setup() {
+    return this.engine === 'codex' ? codexFactory : setup
+  }
   getChildren(node?: SetupNode): SetupNode[] {
+    const setup = this.setup
     const items = setup?.items ?? []
     if (!node) return GROUPS.filter(([k]) => items.some((i) => inGroup(i, k))).map(([group]) => ({ group }))
     if ('group' in node) return items.filter((i) => inGroup(i, node.group)).map((item) => ({ item }))
     return []
   }
   getTreeItem(node: SetupNode) {
+    const setup = this.setup
     if ('group' in node) {
-      const [, label, icon] = GROUPS.find(([k]) => k === node.group)!
+      const [, name, icon] = GROUPS.find(([k]) => k === node.group)!
+      const label = this.engine === 'codex' && node.group === 'memory' ? 'Memory (AGENTS.md)' : this.engine === 'codex' && node.group === 'settings' ? 'Config' : name
       const t = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed)
       t.description = String(setup?.items.filter((i) => inGroup(i, node.group)).length ?? 0)
       t.iconPath = new vscode.ThemeIcon(icon)
@@ -720,6 +728,8 @@ export function activate(context: vscode.ExtensionContext) {
   status.show()
   cli = findCli(cfg().get<string>('claudePath') || undefined)
   codexCli = findCodex(cfg().get<string>('codexPath') || undefined)
+  void vscode.commands.executeCommand('setContext', 'agentTrace.hasCodex', !!codexCli.path)
+  const codexTree = vscode.window.createTreeView('agentFlow.codexSetup', { treeDataProvider: new SetupTree('codex') })
 
   live = liveSessions()
   refreshSessions()
@@ -762,7 +772,12 @@ export function activate(context: vscode.ExtensionContext) {
     // After a reload VS Code brings the tab back empty unless someone fills it again.
     vscode.window.registerWebviewPanelSerializer('agentFlow.flow', { deserializeWebviewPanel: async (p) => adopt(p) }),
     vscode.window.registerTreeDataProvider('agentFlow.sessions', new SessionsTree()),
-    vscode.window.registerTreeDataProvider('agentFlow.setup', new SetupTree()),
+    vscode.window.registerTreeDataProvider('agentFlow.setup', new SetupTree('claude')),
+    // Codex's factory comes from Codex itself: opening the view asks it (starting its app-server).
+    codexTree,
+    codexTree.onDidChangeVisibility((e) => {
+      if (e.visible) void refreshCodexFactory()
+    }),
     vscode.window.registerFileDecorationProvider(new EditedFiles()),
     vscode.commands.registerCommand('agentFlow.deleteSession', (s?: SessionSummary | string) => {
       const id = typeof s === 'string' ? s : s?.id
@@ -780,6 +795,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (e.affectsConfiguration('agentTrace.claudePath')) cli = findCli(cfg().get<string>('claudePath') || undefined)
       if (e.affectsConfiguration('agentTrace.codexPath')) {
         codexCli = findCodex(cfg().get<string>('codexPath') || undefined)
+        void vscode.commands.executeCommand('setContext', 'agentTrace.hasCodex', !!codexCli.path)
         codex?.stop()
         codex = undefined
       }

@@ -141,7 +141,11 @@ function App() {
     const has: Record<Engine, boolean> = { claude: !!state.cli?.path, codex: !!state.codex?.path }
     const out: Lane[] = []
     for (const e of ['claude', 'codex'] as Engine[]) {
-      const v = state.views?.[e]
+      // The latest message went elsewhere and nothing was handed to this agent: its last turn is over and
+      // done with, so its lane waits, empty, rather than showing an old reply.
+      const direct = state.direct ?? []
+      const involved = !direct.length || direct.includes(e) || (state.handoffs ?? []).some((h) => h.to === e)
+      const v = involved ? state.views?.[e] : undefined
       if (!v && !has[e]) continue
       const view = v ?? (e === 'codex' ? NO_CODEX : NO_SESSION)
       const part = state.chat?.[e]
@@ -150,7 +154,7 @@ function App() {
     }
     if (!out.length) out.push({ engine: 'claude', view: NO_SESSION, setup: buildSetup(NO_SESSION, state.setup), idle: true })
     return out
-  }, [state?.folder, state?.views, state?.setup, state?.codexSetup, state?.cli?.path, state?.codex?.path, state?.chat?.claude?.mcp, state?.chat?.codex?.mcp, state?.chat?.claude?.reconnecting?.join(), state?.chat?.codex?.reconnecting?.join()])
+  }, [state?.folder, state?.views, state?.direct, state?.handoffs, state?.setup, state?.codexSetup, state?.cli?.path, state?.codex?.path, state?.chat?.claude?.mcp, state?.chat?.codex?.mcp, state?.chat?.claude?.reconnecting?.join(), state?.chat?.codex?.reconnecting?.join()])
   const lead = lanes.find((l) => !l.idle && l.view.id === state?.current?.id) ?? lanes.find((l) => !l.idle) ?? lanes[0]
   const view = lead?.view
   const setup = lead?.setup

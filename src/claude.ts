@@ -253,8 +253,6 @@ function newAgent(id: string, kind: Agent['kind'], type: string, title: string, 
 }
 
 const STEP_LIMIT = 80
-/** Finished background subagents of earlier turns kept on the canvas. */
-const EARLIER_KEPT = 6
 
 /** One session: the main transcript plus its subagents' transcripts, folded into a SessionView. */
 export class SessionReader {
@@ -571,14 +569,12 @@ export class SessionReader {
 
     const p = promptOf(e)
     if (!p) return
-    // A new turn: the canvas starts over. Subagents still at work stay, and so do background ones — like
-    // Claude Code's agent map, which lists them for the whole session (the latest few).
+    // A new turn: the canvas starts over. Only subagents still at work stay (marked earlier); finished
+    // ones, and the reports they gave, belong to the turn that is over.
     v.turn = { prompt: p.prompt, command: p.command, start: at }
     v.turns++
     v.main = { ...newAgent('main', 'main', 'Claude', p.prompt, at), model: v.main.model, prompt: p.prompt }
-    const kept = v.subagents.filter((a) => a.status === 'running' || a.background)
-    const finished = kept.filter((a) => a.status !== 'running').slice(-EARLIER_KEPT)
-    v.subagents = kept.filter((a) => a.status === 'running' || finished.includes(a))
+    v.subagents = v.subagents.filter((a) => a.status === 'running')
     for (const a of v.subagents) a.earlier = true
     v.files = []
     for (const [id, s] of this.steps) if (s.owner.kind === 'main') this.steps.delete(id)

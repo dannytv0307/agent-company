@@ -71,8 +71,7 @@ export class Trace {
     this.target = target
     if (open?.claude) this.claude = this.makeClaude(open.claude.resume, open.claude.history)
     if (open?.codex) this.codex = this.makeCodex(open.codex.resume)
-    const first = this.claude ?? this.codex
-    if (first) this.direct = [first.engine]
+    this.direct = [this.claude, this.codex].filter((c) => !!c).map((c) => c!.engine)
   }
 
   /** The agent in front: the one the user's latest message went to (Claude first, with both). */

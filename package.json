@@ -131,6 +131,11 @@
         {
           "id": "agentFlow.setup",
           "name": "Claude Factory"
+        },
+        {
+          "id": "agentFlow.codexSetup",
+          "name": "Codex Factory",
+          "when": "agentTrace.hasCodex"
         }
       ]
     },

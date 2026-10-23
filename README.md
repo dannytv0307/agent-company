@@ -45,7 +45,7 @@ Chat right next to the flow, with **your own Claude Code or Codex**: the CLI you
 - **Frames** separate the parts of the flow, all level at the top: the Claude factory, prompt and slash command, main agent, subagents, tools and output. A frame lights up while work goes through it. Items not used in this turn are faded.
 - **Looks like part of VS Code**: backgrounds, cards, lines and text follow your colour theme, whether light, dark or high contrast. The accent that marks work in progress follows your theme too, or you can pick gold, terracotta, ocean, teal, violet or rose with the dots in the header, or set `agentTrace.accentColor`.
 - **Click any card for details**: a tool call's input and result, a subagent's task and report, or a setup item's description with a link to its file.
-- **The Agent Trace sidebar** lists the folder's Claude Code sessions, those at work marked, and its Claude factory (the setup, as a tree: click an item to open its file). Opening the tab while Claude Code works in another window shows that session.
+- **The Agent Trace sidebar** lists the folder's sessions (Claude Code and Codex), those at work marked, then the Claude Factory and the Codex Factory as trees: click an item to open its file. Opening the tab while Claude Code works in another window shows that session.
 - **The status bar** shows what is running now, e.g. `Claude · Bash npm test · 2 subagents`.
 - **The Explorer** marks files being edited in the current turn with a ● badge.
 
