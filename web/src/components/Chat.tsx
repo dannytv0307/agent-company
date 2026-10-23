@@ -154,11 +154,23 @@ export function AskCard({ ask, who = 'Claude' }: { ask: Ask; who?: string }) {
         <button className="btn primary" onClick={() => decide(ask.requestId, { kind: 'allow' })}>
           Allow
         </button>
-        {ask.canAlways && (
-          <button className="btn" onClick={() => decide(ask.requestId, { kind: 'always' })} title="Allow, and don’t ask again for this">
-            Always allow
-          </button>
-        )}
+        {/* Shown even when not offered, so its absence is explained rather than a mystery. */}
+        <button
+          className="btn"
+          disabled={!ask.canAlways}
+          onClick={() => decide(ask.requestId, { kind: 'always' })}
+          title={
+            ask.canAlways
+              ? ask.engine === 'codex'
+                ? 'Allow, and don’t ask again for this in this session'
+                : 'Allow, and don’t ask again: adds the rule Claude Code suggests'
+              : ask.engine === 'codex'
+                ? 'This request can only be answered once.'
+                : 'Claude Code offers no lasting rule here: one would allow more than this single action.'
+          }
+        >
+          Always allow
+        </button>
         <button className="btn deny" onClick={() => decide(ask.requestId, { kind: 'deny' })}>
           Deny
         </button>

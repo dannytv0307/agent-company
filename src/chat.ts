@@ -117,6 +117,8 @@ export class Chat {
     private readonly changed: () => void,
     /** MCP servers of Agent Trace's own for this chat (the hand-over to Codex). */
     private readonly tools?: Record<string, McpServerConfig>,
+    /** What Claude is told about where it runs (appended to Claude Code's own system prompt). */
+    private readonly about?: string,
   ) {
     this.sessionId = resume
     this.lines = history
@@ -290,7 +292,7 @@ export class Chat {
         pathToClaudeCodeExecutable: this.cli,
         // The user's own setup: their settings, CLAUDE.md, agents, skills, MCP servers, plugins.
         settingSources: ['user', 'project', 'local'],
-        systemPrompt: { type: 'preset', preset: 'claude_code' },
+        systemPrompt: { type: 'preset', preset: 'claude_code', ...(this.about ? { append: this.about } : {}) },
         resume: this.sessionId,
         ...(this.mode ?? this.permissionMode ? { permissionMode: (this.mode ?? this.permissionMode) as PermissionMode } : {}),
         ...(this.mode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),

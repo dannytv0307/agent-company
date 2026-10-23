@@ -469,6 +469,7 @@ code, pre { font-family: var(--mono); }
 .ask-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--vscode-button-foreground, #fff); }
 .btn.primary:disabled { opacity: 0.45; cursor: default; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.deny { border-color: color-mix(in srgb, var(--bad) 60%, var(--line-strong)); color: var(--bad); }
 .q { display: flex; flex-direction: column; gap: 6px; }
 .q-text { font-size: 13px; font-weight: 600; }

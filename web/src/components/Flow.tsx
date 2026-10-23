@@ -151,6 +151,11 @@ function StepNode({ data }: NodeProps<FlowNode>) {
             <button className="mini allow" onClick={(e) => (e.stopPropagation(), decide(ask.requestId, { kind: 'allow' }))}>
               Allow
             </button>
+            {ask.canAlways && (
+              <button className="mini" title="Always allow: don’t ask again for this" onClick={(e) => (e.stopPropagation(), decide(ask.requestId, { kind: 'always' }))}>
+                Always
+              </button>
+            )}
             <button className="mini deny" onClick={(e) => (e.stopPropagation(), decide(ask.requestId, { kind: 'deny' }))}>
               Deny
             </button>

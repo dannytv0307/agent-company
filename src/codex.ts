@@ -670,6 +670,8 @@ export class CodexChat {
     private readonly changed: () => void,
     /** Tools of Agent Trace's own for a thread started here (the hand-over to Claude). */
     private readonly tools?: CodexTools,
+    /** What Codex is told about where it runs (added to the developer instructions of the user's config). */
+    private readonly about?: string,
   ) {
     this.sessionId = resume
     this.view = new CodexView(resume ?? `new-${this.key}`, cwd)
@@ -749,7 +751,17 @@ export class CodexChat {
   /** The thread loaded here: started, or resumed when it is an earlier one. */
   private async attach() {
     if (this.attached && this.sessionId) return this.sessionId
-    const r = this.sessionId ? await this.server.call('thread/resume', { threadId: this.sessionId, ...this.threadOptions(), excludeTurns: true }) : await this.server.call('thread/start', { ...this.threadOptions(), ...(this.tools ? { dynamicTools: this.tools.specs } : {}) })
+    // The user's own developer instructions stay; what Agent Trace adds comes after them.
+    let developerInstructions: string | undefined
+    if (this.about) {
+      const cfg = await this.server.call('config/read', { cwd: this.cwd }).catch(() => undefined)
+      const own = typeof cfg?.config?.developer_instructions === 'string' ? cfg.config.developer_instructions : ''
+      developerInstructions = [own, this.about].filter(Boolean).join('\n\n')
+    }
+    const extra = developerInstructions ? { developerInstructions } : {}
+    const r = this.sessionId
+      ? await this.server.call('thread/resume', { threadId: this.sessionId, ...this.threadOptions(), ...extra, excludeTurns: true })
+      : await this.server.call('thread/start', { ...this.threadOptions(), ...extra, ...(this.tools ? { dynamicTools: this.tools.specs } : {}) })
     this.sessionId = r.thread.id
     this.view.view.id = r.thread.id
     this.view.setModel(r.model)

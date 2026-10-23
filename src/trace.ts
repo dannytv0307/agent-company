@@ -22,11 +22,29 @@ const ASK_DESC: Record<Engine, string> = {
     'Hand a self-contained task to Claude (Claude Code), the user’s other coding agent, working in the same folder, and wait for its answer. Use it when the user asks for Claude, or when a second agent’s review, plan or opinion helps. Give the task in full: Claude does not see this conversation.',
 }
 
+/**
+ * What each agent is told about where it runs: inside Agent Trace, started through an SDK, with the
+ * user's own setup — and what the hand-over tool is, so neither takes it for something foreign.
+ */
+function aboutHere(e: Engine, handOver: boolean): string {
+  const how = e === 'claude' ? 'this Claude Code session through the Claude Agent SDK' : 'this Codex thread through codex app-server'
+  const tool =
+    e === 'claude'
+      ? 'The `agent_trace` MCP server comes from Agent Trace itself, not from the user’s configuration: its tool `ask_codex` hands a self-contained task to Codex (OpenAI’s Codex CLI, the user’s other coding agent) in the same folder and returns its answer. Agent Trace allows it without a prompt because the user turned hand-over on.'
+      : 'The tool `ask_claude` comes from Agent Trace itself, not from the user’s configuration: it hands a self-contained task to Claude Code (the user’s other coding agent) in the same folder and returns its answer.'
+  return [
+    `You are running inside Agent Trace, a VS Code extension the user installed to chat with their coding agents and watch them work. Agent Trace started ${how}, in the user’s folder, with the user’s own settings, instructions, skills and MCP servers. Permission prompts and questions reach the user in Agent Trace’s chat and on its flow.`,
+    handOver ? tool : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
 /** What the trace needs from the extension: the agents themselves. */
 export interface TraceDeps {
   has(e: Engine): boolean
-  makeClaude(resume: string | undefined, history: ChatLine[], tools: Record<string, McpServerConfig> | undefined, changed: () => void): Chat
-  makeCodex(resume: string | undefined, tools: CodexTools | undefined, changed: () => void): CodexChat | undefined
+  makeClaude(resume: string | undefined, history: ChatLine[], tools: Record<string, McpServerConfig> | undefined, changed: () => void, about: string): Chat
+  makeCodex(resume: string | undefined, tools: CodexTools | undefined, changed: () => void, about: string): CodexChat | undefined
 }
 
 let counter = 0
@@ -51,8 +69,8 @@ export class Trace {
     open?: { claude?: { resume: string; history: ChatLine[] }; codex?: { resume: string } },
   ) {
     this.target = target
-    if (open?.claude) this.claude = this.deps.makeClaude(open.claude.resume, open.claude.history, this.claudeTools(), changed)
-    if (open?.codex) this.codex = this.deps.makeCodex(open.codex.resume, this.codexTools(), changed)
+    if (open?.claude) this.claude = this.makeClaude(open.claude.resume, open.claude.history)
+    if (open?.codex) this.codex = this.makeCodex(open.codex.resume)
     const first = this.claude ?? this.codex
     if (first) this.direct = [first.engine]
   }
@@ -72,8 +90,18 @@ export class Trace {
 
   /** The agent's chat, started on first need. */
   ensure(e: Engine): Chat | CodexChat | undefined {
-    if (e === 'claude') return (this.claude ??= this.deps.has('claude') ? this.deps.makeClaude(undefined, [], this.claudeTools(), this.changed) : undefined)
-    return (this.codex ??= this.deps.has('codex') ? this.deps.makeCodex(undefined, this.codexTools(), this.changed) : undefined)
+    if (e === 'claude') return (this.claude ??= this.deps.has('claude') ? this.makeClaude(undefined, []) : undefined)
+    return (this.codex ??= this.deps.has('codex') ? this.makeCodex(undefined) : undefined)
+  }
+
+  private makeClaude(resume: string | undefined, history: ChatLine[]) {
+    const tools = this.claudeTools()
+    return this.deps.makeClaude(resume, history, tools, this.changed, aboutHere('claude', !!tools))
+  }
+
+  private makeCodex(resume: string | undefined) {
+    const tools = this.codexTools()
+    return this.deps.makeCodex(resume, tools, this.changed, aboutHere('codex', !!tools))
   }
 
   // ── hand-over ──────────────────────────────────────────────────────────

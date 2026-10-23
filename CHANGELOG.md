@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- **The model, effort and mode you pick are remembered** for each agent: a new chat starts with them, as in Claude Code's own panel. Pick Auto once and Claude asks as often as it does there.
+- **Each agent knows it runs inside Agent Trace**, and what the hand-over tool is. Claude no longer takes the `agent_trace` server for something foreign. Your own Codex developer instructions are kept, Agent Trace's come after them.
+- **Always allow** is on the waiting tool call on the flow too. In the chat it always shows: greyed out, with the reason, when the agent offers no lasting rule.
+
 ## 0.4.0
 
 Agent Trace now has a chat: talk to Claude Code and Codex — one of them, or both — and watch them work, side by side, in one tab.

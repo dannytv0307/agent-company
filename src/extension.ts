@@ -556,6 +556,20 @@ async function archiveThread(t: CodexThread) {
   publish()
 }
 
+/** The model, effort and mode last picked for an agent: a new chat starts with them, as in Claude Code's own panel. */
+type Prefs = { model?: string; effort?: string; mode?: string }
+const prefsOf = (e: Engine) => ctx.globalState.get<Prefs>(`agentTrace.prefs.${e}`) ?? {}
+function withPrefs<T extends Chat | CodexChat>(e: Engine, chat: T): T {
+  const p = prefsOf(e)
+  if (p.model || p.effort || p.mode) void chat.configure(p as never)
+  return chat
+}
+async function rememberPrefs(e: Engine, s: { model?: string | null; effort?: string | null; mode?: string | null }) {
+  const next: Prefs = { ...prefsOf(e) }
+  for (const k of ['model', 'effort', 'mode'] as const) if (s[k] !== undefined) next[k] = s[k] ?? undefined
+  await ctx.globalState.update(`agentTrace.prefs.${e}`, next)
+}
+
 /** A trace: Claude Code and Codex in one conversation, each started when first needed. */
 function newTrace(open?: { claude?: { resume: string; history: ChatLine[] }; codex?: { resume: string } }): Trace | undefined {
   if (!folder) return undefined
@@ -563,10 +577,10 @@ function newTrace(open?: { claude?: { resume: string; history: ChatLine[] }; cod
   const t: Trace = new Trace(
     {
       has: (e) => (e === 'claude' ? !!cli.path : !!codexCli.path),
-      makeClaude: (resume, history, tools, changed) => new Chat(cwd, cli.path ?? 'claude', resume, history, changed, tools),
-      makeCodex: (resume, tools, changed) => {
+      makeClaude: (resume, history, tools, changed, about) => withPrefs('claude', new Chat(cwd, cli.path ?? 'claude', resume, history, changed, tools, about)),
+      makeCodex: (resume, tools, changed, about) => {
         const s = codexServer()
-        return s ? new CodexChat(s, cwd, resume, changed, tools) : undefined
+        return s ? withPrefs('codex', new CodexChat(s, cwd, resume, changed, tools, about)) : undefined
       },
     },
     () => {
@@ -659,6 +673,7 @@ async function onMessage(m: FromWebview) {
       return
     }
     case 'chat.settings':
+      await rememberPrefs(engineOf(m.engine), m)
       await ensureChat()?.configure(engineOf(m.engine), m)
       return
     case 'chat.commands': {
