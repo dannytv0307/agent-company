@@ -2,7 +2,7 @@
   "name": "agent-trace",
   "displayName": "Agent Trace",
   "description": "Chat with your own Claude Code and Codex, one or both, and watch them work live: agents, subagents and tool calls drawn as a flow against the setup each loaded (the Claude factory and the Codex factory). Let them hand tasks to each other, and answer permissions right on the flow.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "dannytv0307",
   "license": "MIT",
   "type": "module",
