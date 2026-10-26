@@ -363,6 +363,8 @@ export type FromWebview =
   /** null: back to the user's default. */
   | { type: 'chat.settings'; engine?: Engine; model?: string | null; effort?: Effort | null; mode?: Mode | null }
   | { type: 'session.delete'; id: string }
+  /** An agent was not found: how to set it up, or look for it again. */
+  | { type: 'setup.help'; engine: Engine }
   /** Ask the Claude Code run here how its MCP servers are, starting it if need be (nothing is sent). */
   | { type: 'mcp.check'; engine?: Engine }
   | { type: 'mcp.reconnect'; engine?: Engine; names: string[] }

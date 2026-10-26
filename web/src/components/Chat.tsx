@@ -194,6 +194,7 @@ export function ChatTab({ asking, busy, onOpen }: { asking: boolean; busy: boole
 function Recipient({ target, claude, codex }: { target: Target; claude?: CliState; codex?: CliState }) {
   const pick = (t: Target) => t !== target && send({ type: 'chat.route', target: t })
   const no = (e: Engine) => !(e === 'codex' ? codex : claude)?.path
+  const missing = (['claude', 'codex'] as Engine[]).filter(no)
   const options: { t: Target; label: string; off: boolean; why?: string }[] = [
     { t: 'claude', label: 'Claude', off: no('claude'), why: claude?.problem },
     { t: 'codex', label: 'Codex', off: no('codex'), why: codex?.problem },
@@ -204,6 +205,11 @@ function Recipient({ target, claude, codex }: { target: Target; claude?: CliStat
       {options.map((o) => (
         <button key={o.t} role="radio" aria-checked={target === o.t} className={`to-${o.t}${target === o.t ? ' on' : ''}`} disabled={o.off} title={o.off ? (o.why ?? `${o.label} was not found.`) : o.t === 'both' ? 'Send to both: Codex makes the changes, Claude reviews and advises' : `Send to ${o.label}`} onClick={() => pick(o.t)}>
           {o.label}
+        </button>
+      ))}
+      {missing.map((e) => (
+        <button key={`setup-${e}`} className="setup-link" onClick={() => send({ type: 'setup.help', engine: e })} title={(e === 'codex' ? codex : claude)?.problem}>
+          Set up {agentName(e)}
         </button>
       ))}
     </div>
@@ -312,7 +318,16 @@ export function ChatPanel({
               Runs your own {twoAgents ? 'Claude Code and Codex' : productName(cli?.path ? 'claude' : 'codex')} in <code>{folder ?? 'this folder'}</code>, with your login, settings, instructions and skills. Watch the work on the right;
               answer permissions here or on the flow.
             </p>
-            {twoAgents && <p>Pick whom each message goes to below. With hand-over on, one can give the other a task: it shows on the flow, between their lanes.</p>}
+            {twoAgents ? (
+              <p>Pick whom each message goes to below. With hand-over on, one can give the other a task: it shows on the flow, between their lanes.</p>
+            ) : (
+              <p>
+                Install {cli?.path ? 'Codex' : 'Claude Code'} too to chat with both, side by side, and let them hand each other tasks.{' '}
+                <button className="link" onClick={() => send({ type: 'setup.help', engine: cli?.path ? 'codex' : 'claude' })}>
+                  How to set it up
+                </button>
+              </p>
+            )}
           </div>
         )}
         {lines.map((l, i) => (
@@ -341,11 +356,11 @@ export function ChatPanel({
             ))}
           </ul>
         )}
-        {twoAgents && (
+        {(cli?.path || codex?.path) && (
           <div className="route-row">
             <span className="route-label">Send to</span>
             <Recipient target={target} claude={cli} codex={codex} />
-            {target !== 'both' && (
+            {target !== 'both' && twoAgents && (
               <label className="handover" title={`Let ${agentName(target)} hand a task to ${agentName(target === 'claude' ? 'codex' : 'claude')} when it helps (ask_${target === 'claude' ? 'codex' : 'claude'})`}>
                 <input type="checkbox" checked={delegate} onChange={(e) => send({ type: 'chat.route', delegate: e.target.checked })} />
                 <span>Hand-over</span>

@@ -8,28 +8,28 @@ import os from 'node:os'
 import path from 'node:path'
 import { query, type CanUseTool, type EffortLevel, type McpServerConfig, type McpServerStatus, type PermissionMode, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { mcpKey } from './claude.ts'
+import { candidates } from './locate.ts'
 import type { Engine } from '../shared/model.ts'
 import type { Ask, ChatLine, ChatState, CliState, Decision, Effort, McpLive, McpStatus, Mode, ModelChoice, SlashCmd } from '../shared/model.ts'
 
 // ── the user's CLI ────────────────────────────────────────────────────────
 
+const CLAUDE_MISSING =
+  'Claude Code was not found. Install it — macOS/Linux: curl -fsSL https://claude.ai/install.sh | bash · Windows: irm https://claude.ai/install.ps1 | iex · or: npm install -g @anthropic-ai/claude-code — run `claude` once to log in, then run “Agent Trace: Find Claude Code and Codex”. Installed somewhere else? Set agentTrace.claudePath.'
+
 /** Where the user's `claude` is: the setting, else PATH, else where its installer puts it. */
 export function findCli(configured?: string): CliState {
-  const candidates: string[] = []
-  if (configured) candidates.push(configured)
-  try {
-    const out = execFileSync(process.platform === 'win32' ? 'where' : 'which', ['claude'], { encoding: 'utf8', timeout: 5000, windowsHide: true })
-    candidates.push(...out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))
-  } catch {
-    // not on PATH
+  // On Windows a shell shim cannot be spawned: the native installer's .exe can, and so can npm's cli.js.
+  const runnable = (c: string) => {
+    if (process.platform !== 'win32' || /\.exe$/i.test(c)) return c
+    const pkg = path.join(path.dirname(c), 'node_modules', '@anthropic-ai', 'claude-code')
+    return [path.join(pkg, 'bin', 'claude.exe'), path.join(pkg, 'cli.js')].find((p) => existsSync(p))
   }
-  candidates.push(path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude'))
-  // On Windows `where` may list a shell shim first; the .exe is what can be spawned.
-  const found = candidates.find((c) => existsSync(c) && (process.platform !== 'win32' || /\.exe$/i.test(c)))
-  if (!found)
-    return { problem: 'Claude Code is not installed. Install it (see code.claude.com/docs), run `claude` once in a terminal and log in with /login, then reopen Agent Trace.' }
+  const found = candidates('claude', configured).map(runnable).find((c): c is string => !!c)
+  if (!found) return { problem: CLAUDE_MISSING }
   try {
-    const version = execFileSync(found, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim().split(/\s/)[0]
+    const out = /\.js$/i.test(found) ? execFileSync('node', [found, '--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true }) : execFileSync(found, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true })
+    const version = out.trim().split(/\s/)[0]
     return { path: found, version }
   } catch (e) {
     return { path: found, problem: `Claude Code at ${found} did not start: ${e instanceof Error ? e.message : String(e)}` }

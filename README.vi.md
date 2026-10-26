@@ -1,77 +1,199 @@
 # Agent Trace
 
-Extension VS Code để **chat với Claude Code hoặc Codex và xem nó làm việc, theo thời gian thực**: prompt của bạn, agent chính, các agent phụ nó tạo ra, từng lần gọi tool, những file nó sửa và kết quả cuối cùng, vẽ thành một luồng cạnh cấu hình của bạn.
+**Chat với Claude Code và Codex ngay trong VS Code, và xem chúng làm việc theo thời gian thực.** Hỏi một agent, agent kia, hoặc cả hai. Cho chúng giao việc cho nhau. Mỗi lượt được vẽ thành một luồng: prompt của bạn, từng agent, các agent phụ nó tạo ra, từng lần gọi tool, những file nó sửa và câu trả lời, đặt cạnh cấu hình mà mỗi agent đã nạp (**Claude factory** và **Codex factory**).
 
-Khung chat chạy **chính Claude Code hoặc Codex của bạn** (CLI bạn đã cài và đăng nhập), với settings, hướng dẫn, skills và MCP servers của bạn. Bạn vẫn có thể dùng chúng như bình thường (extension riêng hoặc terminal): các phiên đó cũng hiện lên flow.
+Agent Trace chạy **chính** Claude Code và Codex của bạn: CLI bạn đã cài và đăng nhập, với settings, hướng dẫn, skills và MCP servers của bạn. Nó không đăng nhập thay bạn, không đọc token, không kèm agent riêng.
 
-**Claude, Codex hay cả hai:** trên ô nhập, **Send to** chọn người nhận cho từng tin nhắn. Gửi cho cả hai thì Codex sửa code, Claude xem và nhận xét. Bật **Hand-over** thì agent này giao việc được cho agent kia (Claude có `ask_codex`, Codex có `ask_claude`, chỉ một bước): việc giao, câu trả lời và quyền mà agent kia cần đều hiện trong chat và trên flow, flow có một làn cho mỗi agent (Claude ở trên, Codex ở dưới). Flow, danh sách phiên và khung cấu hình đi theo chat: **Claude factory** (CLAUDE.md, agents, slash commands, skills, MCP, hooks, plugins, settings) hoặc **Codex factory** (AGENTS.md, skills, MCP servers kèm trạng thái kết nối, plugins, hooks, các file config user/project/managed — đúng như Codex tự báo). Với Codex, gõ `/` để chọn skill (chèn `$skill`), còn ô mode là các mức duyệt của Codex: Read only, Auto, Full access.
+> English: [README.md](README.md)
 
-## Chạy Claude thế nào
+- [Có gì](#có-gì)
+- [Cài đặt](#cài-đặt): Agent Trace, Claude Code, Codex
+- [Cách dùng](#cách-dùng)
+- [Cấu hình Claude Code và Codex](#cấu-hình-claude-code-và-codex)
+- [Quyền](#quyền)
+- [Settings](#settings)
+- [Xử lý sự cố](#xử-lý-sự-cố)
+- [Cách hoạt động và dữ liệu của bạn](#cách-hoạt-động-và-dữ-liệu-của-bạn)
 
-Khung chat chạy CLI `claude` của bạn qua Claude Agent SDK, trên cùng kênh stream-json mà extension VS Code của Claude Code dùng. Agent Trace không đăng nhập, không đọc token, không kèm CLI riêng. Nếu `claude` không có trong PATH, đặt setting `agentTrace.claudePath`. Phiên là phiên Claude Code bình thường: tiếp tục được bằng `/resume` trong terminal hay trong extension Claude Code, và ngược lại.
+## Có gì
 
-Với Codex, khung chat chạy CLI `codex` của bạn qua `codex app-server`, cùng kênh mà extension VS Code của Codex dùng: cùng đăng nhập, config, thread và cách duyệt. Thread vẫn là thread Codex bình thường. Nếu `codex` không có trong PATH, đặt setting `agentTrace.codexPath`.
+- **Một khung chat, hai agent.** Trên ô nhập, **Send to** chọn người nhận cho từng tin nhắn: Claude, Codex hoặc Both. Gửi cho cả hai thì Codex sửa code, Claude xem và nhận xét. Mỗi dòng trong chat có nhãn của agent.
+- **Hand-over (giao việc).** Bật lên thì Claude có thể giao việc cho Codex (`ask_codex`) và Codex giao cho Claude (`ask_claude`), chỉ một bước. Việc được giao và câu trả lời hiện trong chat, và trên flow là một đường nối giữa hai agent.
+- **Flow trực tiếp, mỗi agent một làn.** Claude ở trên, Codex ở dưới, mỗi làn có tool, agent phụ và câu trả lời riêng. Thanh **Now** cho biết công việc đang đi đâu, ví dụ `Claude → code-reviewer → Grep TODO`.
+- **Các factory:** những gì mỗi agent nạp trong folder này, đúng như nó đã nạp: CLAUDE.md hoặc AGENTS.md, agents, slash commands, skills, MCP servers (kèm trạng thái kết nối), hooks, plugins và settings. Mục nào đang dùng thì sáng lên. Thu gọn cả factory hoặc từng nhóm.
+- **Trả lời agent ngay tại chỗ:** quyền (Allow, Always allow, Deny), câu hỏi và plan, trong chat hoặc ngay trên thẻ tool đang chờ.
+- **MCP servers đúng như hiện tại:** đã kết nối (kèm số tool), lỗi (kèm lý do), chờ đăng nhập. Kiểm tra lại hoặc kết nối lại mà không cần gửi tin nhắn.
+- **Các phiên của bạn:** mọi phiên Claude Code và thread Codex của folder, trong sidebar. Tiếp tục ở đây, hoặc vẫn dùng agent ở terminal hay extension riêng của chúng: các phiên đó cũng hiện lên flow.
 
-## Cách hoạt động
+## Cài đặt
 
-Claude Code tự ghi nhật ký mỗi phiên vào `~/.claude/projects/<folder>/<session>.jsonl`, và mỗi agent phụ vào `<session>/subagents/agent-*.jsonl` (kèm `.meta.json` cho biết lời gọi Agent nào đã tạo ra nó). Agent Trace đọc phần mới ghi thêm của các file đó khoảng 0,7 giây một lần và vẽ lại lượt (turn) hiện tại. Bản thân Agent Trace không gửi gì ra ngoài: nội dung bạn gõ vào chat đi tới CLI Claude Code của bạn, và CLI làm việc với Anthropic như mọi khi.
+Bạn cần **VS Code 1.100 trở lên** (Cursor, Windsurf và các editor dựa trên VS Code cũng được) và **ít nhất một** trong hai: Claude Code hoặc Codex. Cài cả hai để chat với cả hai.
 
-Định dạng nhật ký không phải API công khai của Claude Code. Toàn bộ phần đọc nằm trong [src/claude.ts](src/claude.ts); dòng nào lạ sẽ bị bỏ qua chứ không làm hỏng màn hình.
+### 1. Cài Agent Trace
 
-## Trong VS Code
+Tìm **Agent Trace** trong mục Extensions (publisher `dannytv0307`) và cài. Biểu tượng **Agent Trace** sẽ hiện ở thanh hoạt động bên trái.
 
-- **Khung chat**: ngăn kéo bên trái tab Agent Trace, gập lại được; kéo mép phải để chỉnh độ rộng (bấm đúp vào mép để về độ rộng mặc định):
-  - câu trả lời hiện dần; lần gọi tool hiện thành một dòng (chi tiết xem trên flow);
-  - nút **Stop** dừng lượt đang chạy;
-  - gõ `/` để chọn slash command (của Claude Code, của bạn, của project, skill, plugin);
-  - chọn model và permission mode như trong Claude Code; effort chỉnh bằng thanh trượt (kéo, bấm vào một mức, hoặc dùng phím mũi tên); để trống thì theo settings Claude Code của bạn.
-- **MCP servers đúng như hiện tại**: bấm thẻ MCP servers. Khi Claude Code đang chạy ở đây, trạng thái lấy trực tiếp từ nó (đã kết nối kèm số tool, lỗi kèm lý do, cần đăng nhập, bị tắt) và tự cập nhật trong lúc chạy. **Check now** hỏi Claude Code mà không gửi tin nhắn nào; **Reconnect** kết nối lại một server lỗi, hoặc tất cả server lỗi cùng lúc. Server cần đăng nhập thì đăng nhập bằng `/mcp` trong Claude Code ở terminal, rồi bấm Reconnect ở đây.
-- **Trả lời Claude ngay trong chat hoặc trên flow**: xin quyền chạy tool (Allow, Always allow, Deny, bấm được ngay trên thẻ tool đang chờ), câu hỏi (chọn đáp án hoặc tự gõ), plan (duyệt hoặc bảo lập tiếp).
-- **Flow** (`Agent Trace: Open`, hoặc bấm thanh trạng thái), từ trái sang phải:
-  - **Claude factory**: mọi thứ Claude Code nạp khi chạy trong folder này — CLAUDE.md, agents, slash commands, skills, MCP servers, hooks, plugins, settings — ghi rõ nguồn (`project` = `.claude/` của folder, `local` = không vào git, `user` = `~/.claude`, hoặc tên plugin). Mục nào đang được dùng trong lượt hiện tại thì sáng lên và có mũi tên nối tới agent hoặc lệnh đang dùng nó; bấm vào để xem chi tiết và mở file định nghĩa. Bấm tiêu đề để thu cả khung thành một tab; bấm mũi tên cạnh từng nhóm (agents, slash commands, skills…) để thu nhóm đó lại;
-  - prompt của bạn, và slash command nếu có;
-  - agent chính, kèm bước nó đang làm;
-  - các agent phụ (Explore, general-purpose, agent trong `.claude/agents`…) và 8 lần gọi tool gần nhất;
-  - output: câu trả lời cuối, báo cáo của từng agent phụ, danh sách file đã sửa (bấm vào để mở diff).
-- **Khung viền** chia riêng từng phần, mép trên thẳng hàng: Claude factory, prompt và slash command, agent chính, agent phụ, tool, output. Khung nào có việc đang chạy thì sáng lên; mục không dùng trong lượt này thì mờ đi.
-- **Khi Claude cần bạn** (xin quyền chạy tool, hỏi lại, chờ duyệt plan): thanh Now chuyển sang "Needs you" kèm nội dung, header và thanh trạng thái màu vàng, thẻ và tool đang chờ sáng vàng, sidebar có chuông. Kèm một thông báo mỗi lần chờ khi tab đang khuất (tắt bằng `agentTrace.notifyWhenWaiting`). Tín hiệu lấy từ trạng thái phiên do chính Claude Code ghi (`~/.claude/sessions`), không cài thêm gì.
-- **Setup đúng như Claude Code đã nạp**: Agent Trace đối chiếu với danh sách Claude Code tự ghi trong nhật ký phiên (skill, agent, MCP và trạng thái kết nối, file hướng dẫn), nên đúng với mọi kiểu cấu hình. Thứ có trong folder nhưng không được nạp nằm ở thẻ **Here, not loaded**, kèm lý do và cách xử lý. Khi folder chưa có phiên nào, Setup đọc từ file và ghi rõ như vậy.
-- **Hoà vào VS Code**: nền, thẻ, viền và chữ lấy theo theme màu của bạn (sáng, tối hay tương phản cao). Màu chủ đạo mặc định cũng theo theme; hoặc chọn vàng, cam đất, xanh biển, xanh ngọc, tím, hồng bằng các chấm màu trên header hay setting `agentTrace.accentColor`.
-- **Thanh Now** ở trên cùng cho thấy luồng đang đi đâu, ví dụ `/ship (project command) → Claude → code-reviewer (project agent) → Grep TODO`; bấm vào từng bước để xem chi tiết.
-- Mũi tên từ Setup xuất phát đúng từ agent, command, skill hay MCP server đang được dùng. Khi Claude đang chạy, phần ngoài luồng hiện tại mờ đi; rê chuột lên một thẻ để xem luồng đi qua nó.
-- Mũi tên tới việc đang chạy sáng lên, có "sao chổi" chạy dọc theo, cho đến khi việc đó xong.
-- Bấm vào bất kỳ ô nào để xem chi tiết ở bên phải: đầu vào và kết quả của tool, prompt giao cho agent phụ, báo cáo đầy đủ.
-- **Sidebar Agent Trace › Claude Factory**: cùng danh sách cấu hình đó (Claude factory) dạng cây, bấm để mở file.
-- **Sidebar Agent Trace › Sessions**: các phiên Claude Code của folder này, phiên đang chạy hay đang chờ bạn được đánh dấu. Bấm để mở flow và chat tiếp; nút thùng rác xoá phiên (vào thùng rác, khôi phục được). Mở tab khi Claude Code đang chạy ở cửa sổ khác thì tab hiện luôn phiên đó.
-- **Thanh trạng thái**: ví dụ `Claude · Bash npm test · 2 subagents` khi đang chạy.
-- **Explorer**: file Claude đang sửa trong lượt hiện tại có chấm ●.
+### 2. Cài Claude Code và đăng nhập
 
-## Yêu cầu
+Chạy một trong các lệnh sau trong terminal:
 
-- VS Code 1.100 trở lên (Cursor, Windsurf, Antigravity… cũng được).
-- Claude Code đã cài và đăng nhập: chạy `claude` một lần trong terminal, rồi `/login`.
+| Hệ điều hành | Lệnh |
+|---|---|
+| macOS, Linux, WSL | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| Windows (PowerShell) | `irm https://claude.ai/install.ps1 \| iex` |
+| Bất kỳ, có Node.js 18+ | `npm install -g @anthropic-ai/claude-code` |
 
-## Build và cài
+Sau đó đăng nhập một lần: chạy `claude`, gõ `/login` và làm theo hướng dẫn (gói Claude hoặc tài khoản Anthropic Console). Kiểm tra bằng `claude --version`.
+
+### 3. Cài Codex và đăng nhập
+
+| Hệ điều hành | Lệnh |
+|---|---|
+| Bất kỳ, có Node.js | `npm install -g @openai/codex` |
+| macOS (Homebrew) | `brew install --cask codex` |
+
+Sau đó đăng nhập một lần: chạy `codex` và làm theo hướng dẫn (tài khoản ChatGPT hoặc API key). Kiểm tra bằng `codex --version`.
+
+### 4. Mở Agent Trace
+
+Mở một folder, rồi bấm biểu tượng Agent Trace, mục **Agent Trace** trên thanh trạng thái, hoặc chạy **Agent Trace: Open** trong Command Palette.
+
+- Vừa cài agent khi VS Code đang mở? Chạy **Agent Trace: Find Claude Code and Codex**, hoặc reload cửa sổ.
+- Agent nào Agent Trace không tìm thấy sẽ có link **Set up …** cạnh **Send to**: bấm vào để biết thiếu gì và cần làm gì.
+- Cài ở chỗ khác thường? Đặt đường dẫn: `agentTrace.claudePath` hoặc `agentTrace.codexPath` (xem [Settings](#settings)).
+
+## Cách dùng
+
+### Khung chat
+
+- **Send to:** Claude, Codex hoặc Both. **Hand-over** (mặc định bật) cho phép agent bạn đang nhắn giao việc cho agent kia khi cần.
+- **Model, effort và mode** nằm dưới ô nhập, áp dụng cho agent bạn đang nhắn (khi chọn Both, công tắc nhỏ C/X chọn đang chỉnh cho ai). Để trống thì theo settings của bạn. Lựa chọn được nhớ cho chat sau.
+- **`/`** liệt kê slash commands của Claude Code (của bạn, của project, có sẵn, skills, plugins), hoặc skills của Codex (chèn `$skill`).
+- **Stop** dừng lượt đang chạy. **＋** mở chat mới. Kéo mép phải khung chat để chỉnh độ rộng; gập lại bằng **‹**.
+
+### Flow
+
+- Từ trái sang phải: các factory, prompt của bạn, các agent (mỗi agent một làn), tool và agent phụ của chúng, và kết quả.
+- Bấm vào thẻ bất kỳ để xem chi tiết: đầu vào và kết quả của tool, việc và báo cáo của agent phụ, một mục cấu hình và file của nó. Bấm vào file đã sửa để mở diff.
+- Rê chuột lên một thẻ để xem luồng đi qua nó. Tin nhắn mới làm flow bắt đầu lại; agent phụ còn đang chạy được giữ, có nhãn *earlier*.
+
+### Sidebar
+
+- **Sessions:** các phiên Claude Code và thread Codex của folder. Mở một phiên để xem flow và chat tiếp. Xoá phiên Claude (vào thùng rác) hoặc lưu trữ thread Codex (Codex khôi phục lại được).
+- **Claude Factory** và **Codex Factory:** cấu hình dạng cây; bấm vào một mục để mở file.
+
+## Cấu hình Claude Code và Codex
+
+Agent Trace khởi động mỗi agent đúng như CLI sẽ làm trong folder của bạn, nên mọi thứ dưới đây chạy giống hệt ở terminal, trong extension riêng của agent, và ở đây. Thay đổi có hiệu lực từ chat mới (＋).
+
+### Claude Code
+
+| Thứ gì | Project (dùng chung qua git) | Project, chỉ bạn | Bạn, mọi project |
+|---|---|---|---|
+| Hướng dẫn | `CLAUDE.md` | | `~/.claude/CLAUDE.md` |
+| Settings và quyền | `.claude/settings.json` | `.claude/settings.local.json` | `~/.claude/settings.json` |
+| Agent phụ | `.claude/agents/*.md` | | `~/.claude/agents/*.md` |
+| Slash commands | `.claude/commands/*.md` | | `~/.claude/commands/*.md` |
+| Skills | `.claude/skills/<tên>/SKILL.md` | | `~/.claude/skills/<tên>/SKILL.md` |
+| MCP servers | `.mcp.json` (hỏi bạn duyệt một lần) | | `claude mcp add …` |
+
+Ví dụ một file settings có quyền, `.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash(npm run test:*)", "Read(./src/**)"],
+    "deny": ["Read(./.env)", "Bash(rm -rf:*)"],
+    "defaultMode": "acceptEdits"
+  }
+}
+```
+
+### Codex
+
+| Thứ gì | Ở đâu |
+|---|---|
+| Hướng dẫn | `AGENTS.md` ở gốc repo (và trong thư mục con), `~/.codex/AGENTS.md` cho riêng bạn |
+| Settings | `~/.codex/config.toml`; `.codex/config.toml` của project chỉ được dùng khi bạn đã tin cậy (trust) project đó |
+| Skills | `~/.agents/skills/<tên>/SKILL.md` cho bạn, `.agents/skills/<tên>/SKILL.md` trong repo |
+| MCP servers | `[mcp_servers.<tên>]` trong `config.toml` |
+
+Ví dụ `~/.codex/config.toml`:
+
+```toml
+model = "…"                       # một model tài khoản của bạn có
+model_reasoning_effort = "medium"
+approval_policy = "on-request"    # hỏi khi cần nhiều hơn sandbox cho phép
+sandbox_mode = "workspace-write"  # sửa file và chạy lệnh trong project
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_TOKEN"
+```
+
+Các factory hiện đúng những gì mỗi agent đã nạp, kèm nguồn (`project`, `local`, `user`, plugin, có sẵn). Thứ có trong folder nhưng không được nạp nằm ở **Here, not loaded**, kèm lý do.
+
+## Quyền
+
+Mỗi agent tự quyết quyền theo settings của chính nó. Agent Trace chỉ hiện cho bạn những gì agent hỏi.
+
+- **Claude Code:** rule `deny` luôn thắng, kể cả ở mode Bypass; rule `allow` chạy không hỏi; còn lại thì hỏi bạn. **Always allow** thêm rule mà Claude Code đề xuất, giống "đừng hỏi lại" ở terminal (mờ đi kèm lý do khi Claude Code không đề xuất được).
+- **Codex:** `approval_policy` và `sandbox_mode` quyết định. **Always allow** có hiệu lực trong phiên đó.
+- **Mode** chọn trong chat thay cho mặc định của bạn trong chat đó:
+
+| Claude Code | | Codex | |
+|---|---|---|---|
+| Ask first | hỏi trước khi sửa và chạy lệnh | Read only | chỉ đọc; hỏi trước khi thay đổi |
+| Accept edits | sửa không hỏi, chạy lệnh thì hỏi | Auto | sửa và chạy lệnh trong project; cần thêm thì hỏi |
+| Plan | đọc và lập kế hoạch, rồi xin bạn duyệt | Full access | không sandbox, không hỏi |
+| Auto | bộ phân loại tự duyệt thao tác an toàn, hỏi phần còn lại | | |
+| Bypass | không hỏi gì (chỉ dùng trong sandbox bạn tin) | | |
+
+- Tool **giao việc** chạy không hỏi, vì bạn đã bật hand-over. Những gì agent kia cần sau đó vẫn hỏi bạn.
+- Với **Both**, Claude được dặn chỉ xem và nhận xét; đây là lời dặn, không phải khoá. Chọn Plan cho Claude nếu nó tuyệt đối không được sửa.
+
+## Settings
+
+| Setting | Tác dụng |
+|---|---|
+| `agentTrace.claudePath` | Đường dẫn tới `claude` nếu Agent Trace không tự tìm thấy. Ví dụ `C:\Users\ban\.local\bin\claude.exe`, `/opt/homebrew/bin/claude`. |
+| `agentTrace.codexPath` | Đường dẫn tới `codex` nếu Agent Trace không tự tìm thấy. Ví dụ `/usr/local/bin/codex`; trên Windows là file `codex.exe` mà npm đã cài, hoặc để trống. |
+| `agentTrace.notifyWhenWaiting` | Thông báo khi agent chờ bạn mà tab đang khuất. Mặc định bật. |
+| `agentTrace.accentColor` | Màu của việc đang chạy: theo theme, hoặc vàng, cam đất, xanh biển, xanh ngọc, tím, hồng. |
+
+Lệnh: **Agent Trace: Open**, **New Chat**, **Find Claude Code and Codex**.
+
+## Xử lý sự cố
+
+**Codex (hoặc Claude) không hiện, hoặc nút bị mờ.** Agent Trace không tìm thấy nó. Bấm **Set up …** cạnh **Send to** để xem lý do. Cài nó ([Cài đặt](#cài-đặt)), chạy một lần trong terminal để đăng nhập, rồi chạy **Agent Trace: Find Claude Code and Codex**. Trên macOS, VS Code mở từ Dock có thể không thấy PATH của terminal: Agent Trace có hỏi login shell và tìm ở các chỗ thường gặp, nhưng nếu vẫn sót thì đặt `agentTrace.codexPath` / `agentTrace.claudePath` bằng kết quả của `which codex` / `which claude`.
+
+**Báo chưa đăng nhập.** Chạy `claude` rồi `/login`, hoặc chạy `codex` và đăng nhập, trong terminal. Sau đó mở chat mới.
+
+**Model bị từ chối (lỗi 400).** Model trong settings của bạn không dùng được với tài khoản. Chọn model khác trong menu model của chat, hoặc sửa `model` trong config.
+
+**MCP server cần đăng nhập hoặc bị lỗi.** Mở thẻ MCP servers để xem lỗi. Đăng nhập từ terminal (Claude Code: `claude` rồi `/mcp`; Codex: `codex mcp login <tên>`), rồi bấm **Reconnect**. Server của project trong `.mcp.json` chờ bạn duyệt: chạy `claude` trong folder một lần và duyệt.
+
+**"This session is running in another window".** Phiên đang chạy ở terminal hoặc panel riêng của agent. Đợi nó xong, hoặc mở chat mới.
+
+**Hỏi quyền nhiều hơn khi dùng Claude Code trực tiếp.** Có thể bạn dùng mode khác ở đó (ví dụ Auto). Chọn cùng mode trong chat: lựa chọn sẽ được nhớ.
+
+## Cách hoạt động và dữ liệu của bạn
+
+- **Claude Code** chạy qua Claude Agent SDK, cùng kênh mà extension VS Code của Claude Code dùng. **Codex** chạy qua `codex app-server`, kênh mà extension VS Code của Codex dùng. Phiên vẫn là phiên bình thường: tiếp tục bằng `/resume` trong Claude Code, hoặc trong danh sách của Codex.
+- Flow được vẽ từ chính bản ghi của mỗi agent: nhật ký của Claude Code trong `~/.claude/projects/` và thread của Codex. Agent Trace chỉ đọc những gì nó vẽ; không bao giờ đọc giá trị biến môi trường, header hay tham số của MCP.
+- Bản thân Agent Trace không gửi gì ra ngoài. Những gì bạn gõ đi tới Claude Code và Codex của bạn, và chúng làm việc với Anthropic và OpenAI như mọi khi.
+- Mỗi agent được cho biết nó đang chạy trong Agent Trace, và tool giao việc là gì.
+
+## Build từ mã nguồn
 
 ```
 npm install
-npm run package                      # → agent-trace.vsix
+npm run package          # → agent-trace.vsix
 code --install-extension agent-trace.vsix
 ```
 
-`npm run typecheck` kiểm tra kiểu cho cả phần extension (`src/`) lẫn giao diện (`web/`, `shared/`).
+`npm run typecheck` kiểm tra phần extension (`src/`) và giao diện (`web/`, `shared/`).
 
-## Cấu trúc
+---
 
-| Thư mục | Nội dung |
-|---|---|
-| `src/` | Phần chạy trong VS Code: đọc nhật ký (`claude.ts`), đọc cấu hình `.claude` (`setup.ts`), chạy CLI Claude Code cho khung chat (`chat.ts`), tab, sidebar, thanh trạng thái, đánh dấu file (`extension.ts`) |
-| `shared/` | Kiểu dữ liệu chung giữa extension và giao diện (`model.ts`) |
-| `web/` | Giao diện tab: chat và flow (React + React Flow), build bằng Vite vào `out/webview` |
-| `media/` | Icon |
-
-## Lộ trình
-
-- Timeline: mỗi agent một làn theo thời gian, kéo để xem lại phiên cũ.
-- Hỗ trợ Codex (`~/.codex/sessions`).
-- Tuỳ chọn dùng hook của Claude Code để có tín hiệu chính xác hơn.
+Agent Trace là dự án độc lập, không liên kết hay được Anthropic hoặc OpenAI bảo trợ. Claude và Claude Code là nhãn hiệu của Anthropic. Codex là sản phẩm của OpenAI.

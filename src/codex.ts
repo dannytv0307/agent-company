@@ -6,6 +6,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import os from 'node:os'
+import { candidates } from './locate.ts'
 import path from 'node:path'
 import type { Agent, Ask, ChatLine, Engine, ChatState, CliState, Decision, Effort, FileTouch, McpLive, McpStatus, Mode, ModelChoice, SessionSummary, SessionView, Setup, SetupItem, SetupScope, SlashCmd, Step } from '../shared/model.ts'
 
@@ -37,17 +38,8 @@ function nativeBehind(shim: string): string | undefined {
 
 /** Where the user's `codex` is: the setting, else PATH; on Windows npm's shim is followed to its binary. */
 export function findCodex(configured?: string): CliState {
-  const candidates: string[] = []
-  if (configured) candidates.push(configured)
-  try {
-    const out = execFileSync(process.platform === 'win32' ? 'where' : 'which', ['codex'], { encoding: 'utf8', timeout: 5000, windowsHide: true })
-    candidates.push(...out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))
-  } catch {
-    // not on PATH
-  }
   let found: string | undefined
-  for (const c of candidates) {
-    if (!existsSync(c)) continue
+  for (const c of candidates('codex', configured)) {
     if (process.platform !== 'win32' || /\.exe$/i.test(c)) {
       found = c
       break
@@ -58,7 +50,11 @@ export function findCodex(configured?: string): CliState {
       break
     }
   }
-  if (!found) return { problem: 'Codex is not installed. Install it (npm install -g @openai/codex), run `codex` once in a terminal and sign in, then reopen Agent Trace.' }
+  if (!found)
+    return {
+      problem:
+        'Codex was not found. Install it — npm install -g @openai/codex (or on macOS: brew install --cask codex) — run `codex` once to sign in, then run “Agent Trace: Find Claude Code and Codex”. Installed somewhere else? Set agentTrace.codexPath.',
+    }
   try {
     const version = execFileSync(found, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim().split(/\s/).pop()
     return { path: found, version }

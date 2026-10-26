@@ -1,77 +1,188 @@
 # Agent Trace
 
-**Chat with Claude Code or Codex and watch it work, live, in VS Code.** Agent Trace draws each turn of a Claude Code session as a flow: your prompt, the main agent, the subagents it spawns, every tool call, the files it changes and the reply. Beside it is your setup (CLAUDE.md, agents, slash commands, skills, MCP servers, hooks, plugins). Each item lights up while something uses it.
+**Chat with Claude Code and Codex in VS Code, and watch them work, live.** Ask one, the other, or both. Let them hand each other tasks. Every turn is drawn as a flow: your prompt, each agent, the subagents it spawns, every tool call, the files it changes and the reply, beside the setup each agent loaded (the **Claude factory** and the **Codex factory**).
 
-Chat right next to the flow, with **your own Claude Code or Codex**: the CLI you installed and signed into, with your settings, instructions, skills and MCP servers. Or keep using them in their own VS Code extensions or in a terminal: those sessions show on the flow too.
+Agent Trace runs **your own** Claude Code and Codex, the CLIs you installed and signed into, with your settings, instructions, skills and MCP servers. It never signs in for you, never reads a token, and ships no agent of its own.
 
 > Vietnamese: [README.vi.md](README.vi.md)
 
+- [What you get](#what-you-get)
+- [Set up](#set-up): Agent Trace, Claude Code, Codex
+- [Using Agent Trace](#using-agent-trace)
+- [Configure Claude Code and Codex](#configure-claude-code-and-codex)
+- [Permissions](#permissions)
+- [Settings](#settings)
+- [Troubleshooting](#troubleshooting)
+- [How it works, and your data](#how-it-works-and-your-data)
+
 ## What you get
 
-- **Claude, Codex, or both:** above the message box, **Send to** picks who gets each message. With both, Codex makes the changes while Claude reviews and advises. With **Hand-over** on, each can give the other a task (Claude has `ask_codex`, Codex has `ask_claude`, one step only): the task, the answer, and any permission the other agent needs show in the chat and on the flow. The flow has a lane per agent, Claude above Codex, with the two factories on the left:
-  - **Claude factory**: what Claude Code loads here (CLAUDE.md, agents, slash commands, skills, MCP servers, hooks, plugins, settings);
-  - **Codex factory**: what Codex loads here, as Codex itself reports it: AGENTS.md (yours in ~/.codex and the repo's), skills (yours, the repo's, built in), MCP servers with their connection, plugins, hooks and the config files (user, project, managed).
-  - With Codex, `/` lists its skills and inserts `$skill`, as in Codex; the mode picker offers Codex's approvals: Read only, Auto, Full access.
-- **The chat**, in a drawer on the left of the Agent Trace tab that folds away. Drag its right edge to make it wider or narrower (double-click the edge for the default width):
-  - replies stream in, and tool calls show as lines (the flow has the details);
-  - **Stop** ends a turn;
-  - type `/` for slash commands: Claude Code's own, yours, the project's, skills and plugins';
-  - pick the model and the permission mode, as in Claude Code, and the effort on a slider (drag it, click a level, or use the arrow keys). Unset, they follow your Claude Code settings.
-- **Answer Claude in the chat or on the flow:**
-  - a permission to run a tool: Allow, Always allow or Deny, also right on the waiting tool call;
-  - a question: pick an option or write your own answer;
-  - a plan: approve it, or keep planning.
-- **MCP servers, as they are now.** Click the MCP servers card: once Claude Code runs here, their status comes live from it (connected with its tools, failed with the error, needs sign-in, disabled) and stays in sync while it runs. **Check now** asks Claude Code without sending any message; **Reconnect** retries a failed server, or all the failed ones at once. A server that needs sign-in is signed in with `/mcp` in Claude Code in a terminal, then reconnected here.
-- **Sessions** of the open folder, in the sidebar and at the top of the chat: open one to see its flow and continue it, start a new chat, or delete one (it goes to the trash). Sessions are ordinary Claude Code sessions: continue them with `/resume` in a terminal or in Claude Code's extension, and the other way round.
-- **The flow** (`Agent Trace: Open`, or click the status bar item), from left to right:
-  - **Claude factory**: everything Claude Code loads in this folder (its setup), labelled by where it comes from. Fold it into a tab with its title, or fold one kind of it (agents, skills, MCP servers…) into its header with the arrow beside it:
-    - `project`: the folder's `.claude/`;
-    - `local`: files not checked into git;
-    - `user`: `~/.claude`;
-    - or the name of the plugin that provides it.
-  - **Prompt**: your prompt, and the slash command it ran.
-  - **Agents**: the main agent and what it is doing now, then its subagents (Explore, general-purpose, your own `.claude/agents`…).
-  - **Tools**: the latest tool calls.
-  - **Output**: the reply, each subagent's report, and the files changed. Click a file to open its diff.
-- **The Now bar** at the top shows where work is going at a glance, e.g. `/ship (project command) → Claude → code-reviewer (project agent) → Grep TODO`. Each step is clickable.
-- **When Claude needs you**, Agent Trace says what for: a permission to run a tool, a question, a plan to approve. It shows in four places:
-  - the Now bar, e.g. *Needs you · Claude asks to run Bash npm test*;
-  - the header;
-  - the card and tool call that wait, in amber;
-  - the status bar, and the sidebar with a bell.
+- **One chat, two agents.** Above the message box, **Send to** picks who gets each message: Claude, Codex, or Both. With both, Codex makes the changes while Claude reviews and advises. Every line carries its agent's mark.
+- **Hand-over.** With it on, Claude can give Codex a task (`ask_codex`) and Codex can give Claude one (`ask_claude`), one step only. The task and the answer show in the chat, and on the flow as a line between the two agents.
+- **A live flow, a lane per agent.** Claude above, Codex below, each with its tools, subagents and reply. The **Now** bar says where work is going right now, e.g. `Claude → code-reviewer → Grep TODO`.
+- **The factories:** what each agent loads in this folder, as it loaded it: CLAUDE.md or AGENTS.md, agents, slash commands, skills, MCP servers (with their connection), hooks, plugins and settings. Items light up while in use. Fold a factory, or one kind of it, out of the way.
+- **Answer the agents where you are:** permissions (Allow, Always allow, Deny), questions and plans, in the chat or right on the waiting tool call.
+- **MCP servers as they are now:** connected (with their tools), failed (with the error), waiting for sign-in. Check them again, or reconnect, without sending a message.
+- **Your sessions:** every Claude Code session and Codex thread of the folder, in the sidebar. Continue one here, or keep using the agents in a terminal or their own extensions: those sessions show on the flow too.
 
-  A notification shows once per wait while the tab is out of sight. For a session run elsewhere, it has a button to open Claude Code. Turn it off with `agentTrace.notifyWhenWaiting`.
-- **Live edges** glow while work is in progress, with comets running along them. An edge from the setup leaves from the exact agent, command, skill or MCP server in use. While Claude works, everything off the current path fades. Hover any card to trace its path instead.
-- **Frames** separate the parts of the flow, all level at the top: the Claude factory, prompt and slash command, main agent, subagents, tools and output. A frame lights up while work goes through it. Items not used in this turn are faded.
-- **Looks like part of VS Code**: backgrounds, cards, lines and text follow your colour theme, whether light, dark or high contrast. The accent that marks work in progress follows your theme too, or you can pick gold, terracotta, ocean, teal, violet or rose with the dots in the header, or set `agentTrace.accentColor`.
-- **Click any card for details**: a tool call's input and result, a subagent's task and report, or a setup item's description with a link to its file.
-- **The Agent Trace sidebar** lists the folder's sessions (Claude Code and Codex), those at work marked, then the Claude Factory and the Codex Factory as trees: click an item to open its file. Opening the tab while Claude Code works in another window shows that session.
-- **The status bar** shows what is running now, e.g. `Claude · Bash npm test · 2 subagents`.
-- **The Explorer** marks files being edited in the current turn with a ● badge.
+## Set up
 
-## Setup as Claude Code loaded it
+You need **VS Code 1.100 or later** (Cursor, Windsurf and other editors built on VS Code work too) and **at least one** of Claude Code and Codex. Install both to chat with both.
 
-People organise their Claude Code configuration in many ways: `.claude/` folders, `~/.claude`, plugins with their own folders, settings managed by an organisation, repos of configs to copy from. Agent Trace does not guess. At the start of a session, Claude Code writes into its transcript what it loaded: skills, agents, MCP servers and whether they connected, and instruction files. Agent Trace shows that, and uses the files only to say where each item is defined. What sits in the folder but is not loaded goes in a card of its own, **Here, not loaded**, with the reason and what to do about it. Before a folder's first session, the setup is read from the files alone, and the title says so.
+### 1. Install Agent Trace
 
-## How it runs Claude and Codex
+Search for **Agent Trace** in the Extensions view (publisher `dannytv0307`) and install it. An **Agent Trace** icon appears in the activity bar.
 
-The chat runs **your own Claude Code CLI**, the `claude` you installed and logged into. It drives it through the Claude Agent SDK, over the same stream-json channel Claude Code's own VS Code extension uses. Agent Trace never logs in, never reads a token, and ships no CLI of its own. If `claude` is not on PATH, set `agentTrace.claudePath`.
+### 2. Install Claude Code, and log in
 
-With Codex it runs **your own Codex CLI** through `codex app-server`, the channel Codex's own VS Code extension uses: the same sign-in, config, threads and approvals. Threads stay ordinary Codex threads, listed in Codex too. Archiving one here archives it in Codex, which can restore it. If `codex` is not on PATH, set `agentTrace.codexPath`.
+Install it with one of these, in a terminal:
 
-## How it draws the flow
+| System | Command |
+|---|---|
+| macOS, Linux, WSL | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| Windows (PowerShell) | `irm https://claude.ai/install.ps1 \| iex` |
+| Any, with Node.js 18+ | `npm install -g @anthropic-ai/claude-code` |
 
-Claude Code writes a transcript of every session to `~/.claude/projects/<folder>/<session>.jsonl`, and one per subagent next to it. Agent Trace reads what is appended to these files about every 0.7 s and redraws the current turn. The setup comes from `.claude/`, `.mcp.json`, `~/.claude` and the enabled plugins.
+Then log in once: run `claude`, type `/login`, and follow the steps (a Claude subscription or an Anthropic Console account). Check it with `claude --version`.
 
-Agent Trace keeps only names, descriptions and a few harmless facts from these files. It never reads environment values, headers or arguments of MCP servers. Agent Trace itself sends nothing anywhere: what you type in the chat goes to your Claude Code CLI, which talks to Anthropic as it always does.
+### 3. Install Codex, and sign in
 
-The transcript format is not a public API of Claude Code. Agent Trace skips lines it does not understand instead of failing.
+| System | Command |
+|---|---|
+| Any, with Node.js | `npm install -g @openai/codex` |
+| macOS (Homebrew) | `brew install --cask codex` |
 
-## Requirements
+Then sign in once: run `codex` and follow the sign-in (your ChatGPT account, or an API key). Check it with `codex --version`.
 
-- VS Code 1.100 or later. Editors built on VS Code (Cursor, Windsurf, Antigravity…) work too.
-- Claude Code installed and logged in: run `claude` once in a terminal, then `/login`.
-- For Codex (optional): Codex installed and signed in: `npm install -g @openai/codex`, then run `codex` once.
+### 4. Open Agent Trace
+
+Open a folder, then click the Agent Trace icon, the **Agent Trace** item in the status bar, or run **Agent Trace: Open** from the Command Palette.
+
+- Installed an agent while VS Code was open? Run **Agent Trace: Find Claude Code and Codex**, or reload the window.
+- An agent Agent Trace cannot find shows a **Set up …** link beside **Send to**: it says what is missing and what to do.
+- Installed it somewhere unusual? Set its path: `agentTrace.claudePath` or `agentTrace.codexPath` (see [Settings](#settings)).
+
+## Using Agent Trace
+
+### The chat
+
+- **Send to:** Claude, Codex or Both. **Hand-over** (on by default) lets the agent you write to give the other a task when it helps.
+- **Model, effort and mode** sit under the message box, for the agent you write to (with Both, the small C/X switch picks whose). Unset, they follow your own settings. What you pick is remembered for the next chat.
+- **`/`** lists Claude Code's slash commands (yours, the project's, built-in, skills, plugins), or Codex's skills (inserting `$skill`).
+- **Stop** ends the turn. **＋** starts a new chat. Drag the chat's right edge to make it wider; fold it away with **‹**.
+
+### The flow
+
+- From left to right: the factories, your prompt, the agents (a lane each), their tools and subagents, and what came out.
+- Click any card for its details: a tool call's input and result, a subagent's task and report, a setup item and its file. Click a changed file to open its diff.
+- Hover a card to trace the path through it. A new message starts the flow over; subagents still at work stay, marked *earlier*.
+
+### The sidebar
+
+- **Sessions:** the folder's Claude Code sessions and Codex threads. Open one to see its flow and continue it. Delete a Claude session (it goes to the trash) or archive a Codex thread (Codex can restore it).
+- **Claude Factory** and **Codex Factory:** the same setup as trees; click an item to open its file.
+
+## Configure Claude Code and Codex
+
+Agent Trace starts each agent exactly as the CLI would in your folder, so everything below works the same in a terminal, in the agents' own extensions, and here. Changes take effect in the next chat (＋).
+
+### Claude Code
+
+| What | Project (shared through git) | Project, just you | You, every project |
+|---|---|---|---|
+| Instructions | `CLAUDE.md` | | `~/.claude/CLAUDE.md` |
+| Settings and permissions | `.claude/settings.json` | `.claude/settings.local.json` | `~/.claude/settings.json` |
+| Subagents | `.claude/agents/*.md` | | `~/.claude/agents/*.md` |
+| Slash commands | `.claude/commands/*.md` | | `~/.claude/commands/*.md` |
+| Skills | `.claude/skills/<name>/SKILL.md` | | `~/.claude/skills/<name>/SKILL.md` |
+| MCP servers | `.mcp.json` (asks for your approval once) | | `claude mcp add …` |
+
+A settings file with permissions, for example `.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash(npm run test:*)", "Read(./src/**)"],
+    "deny": ["Read(./.env)", "Bash(rm -rf:*)"],
+    "defaultMode": "acceptEdits"
+  }
+}
+```
+
+### Codex
+
+| What | Where |
+|---|---|
+| Instructions | `AGENTS.md` at the repo root (and in subfolders), `~/.codex/AGENTS.md` for you |
+| Settings | `~/.codex/config.toml`; a project's `.codex/config.toml` is used once you trust the project |
+| Skills | `~/.agents/skills/<name>/SKILL.md` for you, `.agents/skills/<name>/SKILL.md` in the repo |
+| MCP servers | `[mcp_servers.<name>]` in `config.toml` |
+
+A `~/.codex/config.toml`, for example:
+
+```toml
+model = "…"                       # a model your account offers
+model_reasoning_effort = "medium"
+approval_policy = "on-request"    # ask when it needs more than the sandbox allows
+sandbox_mode = "workspace-write"  # edit and run commands in the project
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_TOKEN"
+```
+
+The factories show what each agent actually loaded, and where it came from (`project`, `local`, `user`, a plugin, built in). Anything that sits in the folder but is not loaded goes to **Here, not loaded**, with the reason.
+
+## Permissions
+
+Each agent decides on its own permissions, from its own settings. Agent Trace only shows you what an agent asks.
+
+- **Claude Code:** your `deny` rules always win, even in Bypass mode; `allow` rules run without asking; anything else is asked of you. **Always allow** adds the rule Claude Code suggests, as "don't ask again" does in a terminal (greyed out, with the reason, when it offers none).
+- **Codex:** its `approval_policy` and `sandbox_mode` decide. **Always allow** lasts for the session.
+- **Modes** you pick in the chat replace your default for that chat:
+
+| Claude Code | | Codex | |
+|---|---|---|---|
+| Ask first | asks before edits and commands | Read only | reads; asks before changing anything |
+| Accept edits | edits without asking, asks for commands | Auto | edits and runs commands in the project; asks for more |
+| Plan | reads and plans, then asks you to approve | Full access | no sandbox, never asks |
+| Auto | a classifier approves safe actions, asks about the rest | | |
+| Bypass | never asks (only in a sandbox you trust) | | |
+
+- **Hand-over** tools run without a prompt, as you turned hand-over on. Whatever the other agent then needs is asked of you.
+- With **Both**, Claude is told to review and advise only; this is an instruction, not a lock. Pick Plan for Claude if it must not edit.
+
+## Settings
+
+| Setting | What it does |
+|---|---|
+| `agentTrace.claudePath` | Where your `claude` is, if Agent Trace does not find it. E.g. `C:\Users\you\.local\bin\claude.exe`, `/opt/homebrew/bin/claude`. |
+| `agentTrace.codexPath` | Where your `codex` is, if Agent Trace does not find it. E.g. `/usr/local/bin/codex`; on Windows the `codex.exe` npm installed, or leave empty. |
+| `agentTrace.notifyWhenWaiting` | A notification when an agent waits for you and the tab is out of sight. On by default. |
+| `agentTrace.accentColor` | The colour of work in progress: your theme's, or gold, terracotta, ocean, teal, violet, rose. |
+
+Commands: **Agent Trace: Open**, **New Chat**, **Find Claude Code and Codex**.
+
+## Troubleshooting
+
+**Codex (or Claude) does not appear, or its button is greyed out.** Agent Trace did not find it. Click **Set up …** beside **Send to** to see why. Install it ([Set up](#set-up)), run it once in a terminal to sign in, then run **Agent Trace: Find Claude Code and Codex**. On macOS, VS Code opened from the Dock may not see your terminal's PATH: Agent Trace also asks your login shell and looks in the usual places, but if it still misses it, set `agentTrace.codexPath` / `agentTrace.claudePath` to the output of `which codex` / `which claude`.
+
+**"Not logged in" / "not signed in".** Run `claude` and `/login`, or run `codex` and sign in, in a terminal. Then start a new chat.
+
+**The model is rejected (an error 400).** The model in your settings is not available to your account. Pick another one in the chat's model menu, or change `model` in your config.
+
+**An MCP server needs sign-in or failed.** Open the MCP servers card for the error. Sign in from a terminal (Claude Code: `claude`, then `/mcp`; Codex: `codex mcp login <name>`), then click **Reconnect**. A project server from `.mcp.json` waits for your approval: run `claude` in the folder once and approve it.
+
+**"This session is running in another window".** The session is at work in a terminal or an agent's own panel. Wait for it, or start a new chat.
+
+**It asks for permission more often than Claude Code does.** You probably use another mode there (Auto, for example). Pick the same mode in the chat: it is remembered.
+
+## How it works, and your data
+
+- **Claude Code** runs through the Claude Agent SDK, over the same channel Claude Code's own VS Code extension uses. **Codex** runs through `codex app-server`, the channel Codex's own VS Code extension uses. Sessions stay ordinary ones: continue them with `/resume` in Claude Code, or in Codex's own list.
+- The flow is drawn from each agent's own records: Claude Code's transcripts in `~/.claude/projects/` and Codex's threads. Agent Trace reads only what it draws; it never reads environment values, headers or MCP arguments.
+- Agent Trace itself sends nothing anywhere. What you type goes to your Claude Code and Codex, which talk to Anthropic and OpenAI as they always do.
+- Each agent is told it runs inside Agent Trace, and what the hand-over tool is.
 
 ## Build from source
 
@@ -81,8 +192,8 @@ npm run package          # → agent-trace.vsix
 code --install-extension agent-trace.vsix
 ```
 
-`npm run typecheck` checks both the extension (`src/`) and the webview (`web/`, `shared/`).
+`npm run typecheck` checks the extension (`src/`) and the webview (`web/`, `shared/`).
 
 ---
 
-Agent Trace is an independent project, not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.
+Agent Trace is an independent project, not affiliated with or endorsed by Anthropic or OpenAI. Claude and Claude Code are trademarks of Anthropic. Codex is a product of OpenAI.

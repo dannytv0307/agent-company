@@ -578,6 +578,36 @@ async function rememberPrefs(e: Engine, s: { model?: string | null; effort?: str
   await ctx.globalState.update(`agentTrace.prefs.${e}`, next)
 }
 
+/** Look for Claude Code and Codex again (after installing one, or changing a path setting). */
+function detect() {
+  const before = codexCli.path
+  cli = findCli(cfg().get<string>('claudePath') || undefined)
+  codexCli = findCodex(cfg().get<string>('codexPath') || undefined)
+  void vscode.commands.executeCommand('setContext', 'agentTrace.hasCodex', !!codexCli.path)
+  if (codexCli.path !== before) {
+    codex?.stop()
+    codex = undefined
+  }
+  publish()
+  if (codexCli.path) void refreshCodexFactory()
+}
+
+const GUIDE = 'https://github.com/dannytv0307/agent-company#set-up'
+
+/** An agent not found: what to do, with a way to the guide, the path setting, or a new look. */
+async function setupHelp(e: Engine) {
+  const c = e === 'codex' ? codexCli : cli
+  const name = e === 'codex' ? 'Codex' : 'Claude Code'
+  const pick = await vscode.window.showInformationMessage(c.problem ?? `${name} was found: ${c.path}`, 'Open the guide', 'Set the path', 'Look again')
+  if (pick === 'Open the guide') void vscode.env.openExternal(vscode.Uri.parse(GUIDE))
+  else if (pick === 'Set the path') void vscode.commands.executeCommand('workbench.action.openSettings', e === 'codex' ? 'agentTrace.codexPath' : 'agentTrace.claudePath')
+  else if (pick === 'Look again') {
+    detect()
+    const now = e === 'codex' ? codexCli : cli
+    void vscode.window.showInformationMessage(now.path ? `${name} found: ${now.path}${now.version ? ` (${now.version})` : ''}` : `${name} still not found.`)
+  }
+}
+
 /** A trace: Claude Code and Codex in one conversation, each started when first needed. */
 function newTrace(open?: { claude?: { resume: string; history: ChatLine[] }; codex?: { resume: string } }): Trace | undefined {
   if (!folder) return undefined
@@ -714,6 +744,9 @@ async function onMessage(m: FromWebview) {
     case 'session.delete':
       await deleteSession(m.id)
       return
+    case 'setup.help':
+      await setupHelp(m.engine)
+      return
     case 'follow':
       return
   }
@@ -786,6 +819,13 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('agentFlow.showSession', (id: string) => {
       openFlow()
       show(id)
+    }),
+    vscode.commands.registerCommand('agentFlow.detect', () => {
+      detect()
+      const say = (n: string, c: CliState) => (c.path ? `${n} ${c.version ?? ''} ✓`.replace('  ', ' ') : `${n} not found`)
+      void vscode.window.showInformationMessage(`${say('Claude Code', cli)} · ${say('Codex', codexCli)}`, ...(!cli.path || !codexCli.path ? ['Open the guide'] : [])).then((p) => {
+        if (p) void vscode.env.openExternal(vscode.Uri.parse(GUIDE))
+      })
     }),
     vscode.commands.registerCommand('agentFlow.newChat', () => {
       openFlow()

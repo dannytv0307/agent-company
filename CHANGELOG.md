@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2
+
+- **Claude Code and Codex are found in more places:** the PATH of your login shell (on macOS, VS Code opened from the Dock does not see it), npm's global folder, Homebrew, `~/.local/bin`, and Claude Code installed with npm on Windows.
+- **An agent not found is no longer silently missing:** **Send to** shows a **Set up …** link that says what is missing and offers the guide, the path setting, or a new look. New command: **Agent Trace: Find Claude Code and Codex**, to look again after installing one.
+- **A new README:** how to install Claude Code and Codex and sign in, where each one's configuration lives (instructions, settings and permissions, agents, commands, skills, MCP servers), how permissions and modes work, and what to do when something does not show.
+
 ## 1.0.1
 
 - **Codex Factory in the sidebar**, under the Claude Factory, when Codex is installed.
