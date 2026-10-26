@@ -58,6 +58,7 @@ Then sign in once: run `codex` and follow the sign-in (your ChatGPT account, or 
 
 Open a folder, then click the Agent Trace icon, the **Agent Trace** item in the status bar, or run **Agent Trace: Open** from the Command Palette.
 
+- Only one of them installed? Agent Trace works with that one, and warns you once per session that the other was not found (a notification, and a banner in the chat), with how to install it. **Don’t show again** turns the notification off for that agent.
 - Installed an agent while VS Code was open? Run **Agent Trace: Find Claude Code and Codex**, or reload the window.
 - An agent Agent Trace cannot find shows a **Set up …** link beside **Send to**: it says what is missing and what to do.
 - Installed it somewhere unusual? Set its path: `agentTrace.claudePath` or `agentTrace.codexPath` (see [Settings](#settings)).

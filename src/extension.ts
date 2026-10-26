@@ -608,6 +608,33 @@ async function setupHelp(e: Engine) {
   }
 }
 
+/** Agents already warned about in this VS Code session: each missing one is said once. */
+const warned = new Set<Engine>()
+
+/**
+ * An agent not found: Agent Trace goes on with the other, and says so — once per session, with what to
+ * do, unless the user asked not to hear it again for that agent.
+ */
+function warnMissing() {
+  for (const e of ['claude', 'codex'] as Engine[]) {
+    const c = e === 'codex' ? codexCli : cli
+    if (c.path || warned.has(e) || ctx.globalState.get<boolean>(`agentTrace.quiet.${e}`)) continue
+    warned.add(e)
+    const name = e === 'codex' ? 'Codex CLI' : 'Claude Code'
+    const other = e === 'codex' ? (cli.path ? 'Claude Code' : undefined) : codexCli.path ? 'Codex' : undefined
+    const text = `Agent Trace: ${name} was not found${other ? `. You can chat with ${other} only until you install it` : ''}.`
+    void vscode.window.showWarningMessage(text, 'How to install', 'Set the path', 'Look again', 'Don’t show again').then(async (pick) => {
+      if (pick === 'How to install') void vscode.env.openExternal(vscode.Uri.parse(GUIDE))
+      else if (pick === 'Set the path') void vscode.commands.executeCommand('workbench.action.openSettings', e === 'codex' ? 'agentTrace.codexPath' : 'agentTrace.claudePath')
+      else if (pick === 'Look again') {
+        detect()
+        const now = e === 'codex' ? codexCli : cli
+        void vscode.window.showInformationMessage(now.path ? `${name} found: ${now.path}` : `${name} still not found.`)
+      } else if (pick === 'Don’t show again') await ctx.globalState.update(`agentTrace.quiet.${e}`, true)
+    })
+  }
+}
+
 /** A trace: Claude Code and Codex in one conversation, each started when first needed. */
 function newTrace(open?: { claude?: { resume: string; history: ChatLine[] }; codex?: { resume: string } }): Trace | undefined {
   if (!folder) return undefined
@@ -648,6 +675,7 @@ async function onMessage(m: FromWebview) {
       publish()
       void refreshThreads()
       void refreshCodexFactory()
+      warnMissing()
       return
     case 'log':
       log.appendLine(`[webview] ${m.text}`)

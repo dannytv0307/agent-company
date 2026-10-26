@@ -58,6 +58,7 @@ Sau đó đăng nhập một lần: chạy `codex` và làm theo hướng dẫn 
 
 Mở một folder, rồi bấm biểu tượng Agent Trace, mục **Agent Trace** trên thanh trạng thái, hoặc chạy **Agent Trace: Open** trong Command Palette.
 
+- Chỉ cài một trong hai? Agent Trace vẫn chạy với agent đó, và mỗi phiên VS Code cảnh báo một lần là không tìm thấy agent kia (một thông báo, và một dải cảnh báo trong chat), kèm cách cài. **Don’t show again** tắt thông báo cho agent đó.
 - Vừa cài agent khi VS Code đang mở? Chạy **Agent Trace: Find Claude Code and Codex**, hoặc reload cửa sổ.
 - Agent nào Agent Trace không tìm thấy sẽ có link **Set up …** cạnh **Send to**: bấm vào để biết thiếu gì và cần làm gì.
 - Cài ở chỗ khác thường? Đặt đường dẫn: `agentTrace.claudePath` hoặc `agentTrace.codexPath` (xem [Settings](#settings)).

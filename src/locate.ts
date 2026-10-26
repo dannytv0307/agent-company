@@ -14,7 +14,7 @@ function npmGlobalBin(): string | undefined {
   if (npmBin !== undefined) return npmBin || undefined
   npmBin = ''
   try {
-    const prefix = execSync('npm prefix -g', { encoding: 'utf8', timeout: 8000, windowsHide: true }).trim()
+    const prefix = execSync('npm prefix -g', { encoding: 'utf8', timeout: 8000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
     if (prefix) npmBin = win ? prefix : path.join(prefix, 'bin')
   } catch {
     // no npm
@@ -27,7 +27,7 @@ export function candidates(name: string, configured?: string): string[] {
   const out: string[] = []
   if (configured) out.push(configured)
   try {
-    const found = execFileSync(win ? 'where' : 'which', [name], { encoding: 'utf8', timeout: 5000, windowsHide: true })
+    const found = execFileSync(win ? 'where' : 'which', [name], { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
     out.push(...found.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))
   } catch {
     // not on the PATH VS Code has
@@ -36,7 +36,7 @@ export function candidates(name: string, configured?: string): string[] {
     // The PATH the user's own terminal has.
     try {
       const shell = process.env.SHELL || '/bin/zsh'
-      const found = execFileSync(shell, ['-lc', `command -v ${name}`], { encoding: 'utf8', timeout: 5000 }).trim().split('\n').pop()
+      const found = execFileSync(shell, ['-lc', `command -v ${name}`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').pop()
       if (found && found.startsWith('/')) out.push(found)
     } catch {
       // no login shell to ask

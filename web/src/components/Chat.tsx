@@ -235,6 +235,8 @@ export function ChatPanel({
   onClose: () => void
 }) {
   const [draft, setDraft] = useState('')
+  // The "not found" banner, hidden by the user until the page reloads.
+  const [dismissed, setDismissed] = useState(false)
   const end = useRef<HTMLDivElement>(null)
   const lines = chat?.lines ?? []
   const asks = chat?.asks ?? []
@@ -310,6 +312,19 @@ export function ChatPanel({
         </button>
       </header>
       {missing?.problem && <div className="cli-problem">{missing.problem}</div>}
+      {!missing && !twoAgents && (cli?.path || codex?.path) && !dismissed && (
+        <div className="cli-warn" role="status">
+          <span>
+            <b>{cli?.path ? 'Codex CLI' : 'Claude Code'} not found.</b> Agent Trace works with {cli?.path ? 'Claude Code' : 'Codex'} only until you install it.
+          </span>
+          <button className="link" onClick={() => send({ type: 'setup.help', engine: cli?.path ? 'codex' : 'claude' })}>
+            Set up
+          </button>
+          <button className="icon-btn" aria-label="Hide" title="Hide until VS Code restarts" onClick={() => setDismissed(true)}>
+            ×
+          </button>
+        </div>
+      )}
       <div className="chat-scroll">
         {!lines.length && (
           <div className="chat-empty">
